@@ -1,10 +1,12 @@
 from utils.logger import setup_logger
-from datasets import make_dataloader
+# from datasets import make_dataloader
+from datasets.make_dataloader_depth import make_dataloader_depth
 from model import make_model
 from solver import make_optimizer
 from solver.scheduler_factory import create_scheduler
 from loss import make_loss
-from processor import do_train
+# from processor import do_train
+from processor.processor_depth import do_train_4DNet
 import random
 import torch
 import numpy as np
@@ -63,7 +65,7 @@ if __name__ == '__main__':
         torch.distributed.init_process_group(backend='nccl', init_method='env://')
 
     os.environ['CUDA_VISIBLE_DEVICES'] = cfg.MODEL.DEVICE_ID
-    train_loader, train_loader_normal, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader(cfg)
+    train_loader, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader_depth(cfg)
 
     model = make_model(cfg, num_class=num_classes, camera_num=camera_num, view_num = view_num)
 
@@ -73,7 +75,7 @@ if __name__ == '__main__':
 
     scheduler = create_scheduler(cfg, optimizer)
 
-    do_train(
+    do_train_4DNet(
         cfg,
         model,
         center_criterion,

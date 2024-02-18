@@ -23,7 +23,7 @@ INPUT:
 
 DATASETS:
   # NAMES: ('market1501')
-  NAMES: ('procthor')
+  NAMES: ('procthor_depth')
   ROOT_DIR: ('./data')
   # ROOT_DIR: ('../../data')
 
