@@ -4,6 +4,8 @@ from torch.utils.data import Dataset
 import os.path as osp
 import random
 import torch
+import os 
+import cv2
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
@@ -100,8 +102,9 @@ class RGBD_Dataset(Dataset):
     def __getitem__(self, index):
         img_path, pid, camid, trackid = self.dataset[index]
         img_name = img_path.split("/")[-1]
-        depth_path = osp.join(*(img_path.split("/")[:-1]), f"{img_name}_d.jpg")
-        assert os.path.exists(depth_path), print(f"DEPTH PATH IS INVALID!")
+        depth_path = osp.join(*(img_path.split("/")[:-1]), f"{img_name.split('.jpg')[0]}_d.jpg")
+        # print(f"depth_path = {depth_path}") 
+        assert os.path.exists(depth_path) 
         depth = cv2.imread(depth_path, cv2.IMREAD_GRAYSCALE)
         img = read_image(img_path)
 

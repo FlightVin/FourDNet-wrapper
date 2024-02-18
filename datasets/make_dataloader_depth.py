@@ -76,12 +76,21 @@ def make_dataloader_depth(cfg):
         ]
     )
 
+
+    depth_transforms = T.Compose(
+        [
+            T.ToPILImage(),
+            T.Resize(cfg.INPUT.SIZE_TEST),
+            T.ToTensor(),
+        ]
+    )
+
     num_workers = cfg.DATALOADER.NUM_WORKERS
 
     dataset = __factory[cfg.DATASETS.NAMES](root=cfg.DATASETS.ROOT_DIR)
 
     # TODO: see what transforms need to be applied on the depth map
-    train_set = RGBD_Dataset(dataset.train, train_transforms)
+    train_set = RGBD_Dataset(dataset.train, train_transforms, depth_transforms)
     # train_set = ImageDataset(dataset.train, train_transforms)
     # train_set_normal = ImageDataset(dataset.train, val_transforms)
     num_classes = dataset.num_train_pids
@@ -128,7 +137,7 @@ def make_dataloader_depth(cfg):
             )
         )
 
-    val_set = RGBD_Dataset(dataset.test, val_transforms)
+    val_set = RGBD_Dataset(dataset.query, val_transforms, depth_transforms)
 
     val_loader = DataLoader(
         val_set,
