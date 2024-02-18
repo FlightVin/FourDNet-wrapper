@@ -84,3 +84,31 @@ class ImageDataset(Dataset):
             img = self.transform(img)
 
         return img, pid, camid, trackid,img_path.split('/')[-1]
+
+
+
+
+class RGBD_Dataset(Dataset):
+    def __init__(self, dataset, transform=None, depth_transform=None):
+        self.dataset = dataset
+        self.transform = transform
+        self.depth_transform = depth_transform
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        img_path, pid, camid, trackid = self.dataset[index]
+        img_name = img_path.split("/")[-1]
+        depth_path = osp.join(*(img_path.split("/")[:-1]), f"{img_name}_d.jpg")
+        assert os.path.exists(depth_path), print(f"DEPTH PATH IS INVALID!")
+        depth = cv2.imread(depth_path, cv2.IMREAD_GRAYSCALE)
+        img = read_image(img_path)
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        if self.depth_transform is not None: 
+            depth = self.depth_transform(depth)
+
+        return img, depth, pid, camid, trackid,img_path.split('/')[-1]
