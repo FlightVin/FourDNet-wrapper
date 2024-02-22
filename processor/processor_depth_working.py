@@ -49,7 +49,7 @@ def do_train_4DNet(cfg,
         scheduler.step(epoch)
         model.train()
         loop = tqdm(train_loader, desc=f"Epoch {epoch}", leave=False)
-        for n_iter, (img, depth, vid, target_cam, target_view) in enumerate(loop):
+        for n_iter, (img, depth, vid, target_cam, target_view) in enumerate(train_loader):
             optimizer.zero_grad()
             optimizer_center.zero_grad()
             img = img.to(device)
@@ -57,14 +57,19 @@ def do_train_4DNet(cfg,
             target = vid.to(device)
             target_cam = target_cam.to(device)
             target_view = target_view.to(device)
-            with amp.autocast(enabled=True):
-                score, feat = model(img, target, cam_label=target_cam, view_label=target_view )
-                loss = loss_fn(score, feat, target, target_cam)
+            # with amp.autocast(enabled=True):
+            score, feat = model(img, depth, target, cam_label=target_cam, view_label=target_view)
+            assert not torch.any(score.isnan()) and not torch.any(score.isinf())
+            assert not torch.any(feat.isnan()) and not torch.any(feat.isinf())
+            loss = loss_fn(score, feat, target, target_cam)
+            assert not loss.isnan()
 
-            scaler.scale(loss).backward()
+            loss.backward()
+            optimizer.step()
+            # scaler.scale(loss).backward()
 
-            scaler.step(optimizer)
-            scaler.update()
+            # scaler.step(optimizer)
+            # scaler.update()
 
             # this condition is not met for Market dataset
             if 'center' in cfg.MODEL.METRIC_LOSS_TYPE:
@@ -80,12 +85,12 @@ def do_train_4DNet(cfg,
             loss_meter.update(loss.item(), img.shape[0])
             acc_meter.update(acc, 1)
 
-            loop.set_postfix(loss = loss_meter.avg, acc = acc_meter.avg, lr = scheduler._get_lr(epoch)[0])
             torch.cuda.synchronize()
-            # if (n_iter + 1) % log_period == 0:
-            #     logger.info("Epoch[{}] Iteration[{}/{}] Loss: {:.3f}, Acc: {:.3f}, Base Lr: {:.2e}"
-            #                 .format(epoch, (n_iter + 1), len(train_loader),
-            #                         loss_meter.avg, acc_meter.avg, scheduler._get_lr(epoch)[0]))
+            loop.set_postfix(loss = loss_meter.avg, accuracy = acc_meter.avg, lr = scheduler._get_lr(epoch)[0])
+            if (n_iter + 1) % log_period == 0:
+                logger.info("Epoch[{}] Iteration[{}/{}] Loss: {:.3f}, Acc: {:.3f}, Base Lr: {:.2e}"
+                            .format(epoch, (n_iter + 1), len(train_loader),
+                                    loss_meter.avg, acc_meter.avg, scheduler._get_lr(epoch)[0]))
 
         end_time = time.time()
         time_per_batch = (end_time - start_time) / (n_iter + 1)
@@ -113,7 +118,7 @@ def do_train_4DNet(cfg,
                             img = img.to(device)
                             camids = camids.to(device)
                             target_view = target_view.to(device)
-                            feat = model(img, cam_label=camids, view_label=target_view)
+                            feat = model(img, depth, cam_label=camids, view_label=target_view)
                             evaluator.update((feat, vid, camid))
                     cmc, mAP, _, _, _, _, _ = evaluator.compute()
                     logger.info("Validation Results - Epoch: {}".format(epoch))
@@ -128,7 +133,7 @@ def do_train_4DNet(cfg,
                         img = img.to(device)
                         camids = camids.to(device)
                         target_view = target_view.to(device)
-                        feat = model(img, cam_label=camids, view_label=target_view)
+                        feat = model(img, depth, cam_label=camids, view_label=target_view)
                         evaluator.update((feat, vid, camid))
                 cmc, mAP, _, _, _, _, _ = evaluator.compute()
                 logger.info("Validation Results - Epoch: {}".format(epoch))

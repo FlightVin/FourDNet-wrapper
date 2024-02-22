@@ -212,6 +212,76 @@ class build_transformer(nn.Module):
         print('Loading pretrained model for finetuning from {}'.format(model_path))
 
 
+class build_FourDNet(nn.Module):
+    def __init__(self, num_classes, camera_num, view_num, cfg, factory, rearrange):
+        print(f"<===================== building FourDNet =========================>")
+        super(build_FourDNet, self).__init__()
+        model_path = cfg.MODEL.PRETRAIN_PATH
+        pretrain_choice = cfg.MODEL.PRETRAIN_CHOICE
+        self.neck = cfg.MODEL.NECK
+        self.neck_feat = cfg.TEST.NECK_FEAT
+        self.in_planes = 768
+
+        print('using Transformer_type: {} as a backbone'.format(cfg.MODEL.TRANSFORMER_TYPE))
+
+        if cfg.MODEL.SIE_CAMERA:
+            camera_num = camera_num
+        else:
+            camera_num = 0
+
+        if cfg.MODEL.SIE_VIEW:
+            view_num = view_num
+        else:
+            view_num = 0
+
+        self.base = factory[cfg.MODEL.TRANSFORMER_TYPE](img_size=cfg.INPUT.SIZE_TRAIN, sie_xishu=cfg.MODEL.SIE_COE, local_feature=cfg.MODEL.JPM, camera=camera_num, view=view_num, stride_size=cfg.MODEL.STRIDE_SIZE, drop_path_rate=cfg.MODEL.DROP_PATH)
+
+        if pretrain_choice == 'imagenet':
+            self.base.load_param(model_path)
+            print('Loading pretrained ImageNet model......from {}'.format(model_path))
+        
+        self.classifier = nn.Linear(self.in_planes, num_classes)
+
+        # reduce dimensionality of ViT features
+        self.reduced_dim = 128
+        self.reduce_dims = nn.Linear(self.in_planes, self.reduced_dim)
+        self.reduce_dims_global = nn.Linear(self.in_planes, self.reduced_dim)
+
+        # project depth input to higher dimension
+        self.project_depth = nn.Sequential(
+            nn.Conv2d(1, self.reduced_dim // 2, 3, 2, 1),
+            nn.Conv2d(self.reduced_dim // 2, self.reduced_dim, 3, 2, 1),
+            nn.Conv2d(self.reduced_dim, self.reduced_dim, 3, 2, 1),
+            nn.Conv2d(self.reduced_dim, self.reduced_dim, 3, 2, 1),
+        )
+        self.global_depth_feat = nn.Parameter(torch.randn(self.reduced_dim))
+
+        # R2D cross attention
+        self.r2d_k = 3
+        self.r2d_m = 8
+        self.r2d_Q = nn.Linear(2 * self.reduced_dim, self.reduced_dim)
+        self.merge_local_global_depth = nn.Linear(2 * self.reduced_dim, self.reduced_dim)
+        self.r2d_V = nn.Linear(self.reduced_dim, self.reduced_dim)
+        self.r2d_selector = nn.Sequential(
+            nn.Linear(self.reduced_dim, 2 * self.r2d_m * self.r2d_k),
+            nn.Sigmoid(),
+        ) 
+        self.r2d_attn_weights = nn.Sequential(
+            nn.Linear(self.reduced_dim, self.r2d_m * self.r2d_k)
+        )
+
+    def forward(self, x, label=None, cam_label= None, view_label=None):  # label is unused if self.cos_layer == 'no'
+        features = self.base(x, cam_label=cam_label, view_label=view_label)
+        # print(f"features.shape = {features.shape}")
+
+        # global branch
+        global_feat = features[:, 0]
+        final_embedding = global_feat 
+        cls_score = self.classifier(final_embedding)
+        print(f"completed iteration!")
+        return cls_score, final_embedding
+
+
 class build_transformer_local(nn.Module):
     def __init__(self, num_classes, camera_num, view_num, cfg, factory, rearrange):
         super(build_transformer_local, self).__init__()
@@ -391,14 +461,17 @@ __factory_T_type = {
 }
 
 def make_model(cfg, num_class, camera_num, view_num):
-    if cfg.MODEL.NAME == 'transformer':
-        if cfg.MODEL.JPM:
-            model = build_transformer_local(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
-            print('===========building transformer with JPM module ===========')
-        else:
-            model = build_transformer(num_class, camera_num, view_num, cfg, __factory_T_type)
-            print('===========building transformer===========')
-    else:
-        model = Backbone(num_class, cfg)
-        print('===========building ResNet===========')
+    # if cfg.MODEL.NAME == 'transformer':
+    #     if cfg.MODEL.JPM:
+    #         model = build_transformer_local(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
+    #         print('===========building transformer with JPM module ===========')
+    #     else:
+    #         model = build_transformer(num_class, camera_num, view_num, cfg, __factory_T_type)
+    #         print('===========building transformer===========')
+    # else:
+    #     model = Backbone(num_class, cfg)
+    #     print('===========building ResNet===========')
+
+    model = build_FourDNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
+    # model = build_transformer_local(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     return model
