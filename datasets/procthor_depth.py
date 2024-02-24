@@ -84,7 +84,7 @@ class ProcThor_Depth(BaseImageDataset):
         dataset = []
         for ctg in os.listdir(dir_path):
             for img_path in os.listdir(osp.join(dir_path, ctg)):
-                if img_path.find("_d.jpg") != -1:
+                if img_path.find(".npy") != -1:
                     # depth image, not to be considered here
                     continue
                 if False:

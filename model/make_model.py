@@ -4,6 +4,38 @@ from .backbones.resnet import ResNet, Bottleneck
 import copy
 from .backbones.vit_pytorch import vit_base_patch16_224_TransReID, vit_small_patch16_224_TransReID, deit_small_patch16_224_TransReID
 from loss.metric_learning import Arcface, Cosface, AMSoftmax, CircleLoss
+import time
+import matplotlib.pyplot as plt
+import os
+import shutil
+
+def bilinear_interpolation(f, x1, x2, y1, y2, x, y):
+    x1 = x1.type(torch.float32) 
+    x2 = x2.type(torch.float32) 
+    y1 = y1.type(torch.float32) 
+    y2 = y2.type(torch.float32) 
+    x = x.type(torch.float32) 
+    y = y.type(torch.float32) 
+    h = y2 - y1
+    w = x2 - x1
+    assert torch.all(h >= 0) and torch.all(w >= 0)
+    coeff = 1 / (h * w)
+    coeff[(h == 0) | (w == 0)] = 2
+    x = torch.cat(((x2 - x).unsqueeze(-1), (x - x1).unsqueeze(-1)), -1)
+    y = torch.cat(((y2 - y).unsqueeze(-1), (y - y1).unsqueeze(-1)), -1)
+    x[w == 0] = torch.tensor([1.0, 1.0]).to(x.device)
+    y[h == 0] = torch.tensor([1.0, 1.0]).to(y.device)
+    x = x.unsqueeze(-2).repeat(1, 1, 1, f.size(-1), 1).unsqueeze(-1)
+    M = f.transpose(-1, -2).reshape(*f.shape[:-2], f.shape[-1], 2, 2)
+    y = y.unsqueeze(-2).repeat(1, 1, 1, f.size(-1), 1).unsqueeze(-1)
+    assert not torch.any(coeff.isnan())
+    assert not torch.any(M.isnan())
+    assert not torch.any(x.isnan())
+    assert not torch.any(y.isnan())
+    res = coeff.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) * x.transpose(-1, -2) @ M @ y
+    assert not torch.any(res.isnan())
+    return res
+
 
 def shuffle_unit(features, shift, group, begin=1):
 
@@ -212,6 +244,106 @@ class build_transformer(nn.Module):
         print('Loading pretrained model for finetuning from {}'.format(model_path))
 
 
+class VGGFeatures(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.model = torch.hub.load('pytorch/vision:v0.10.0', 'vgg11', pretrained=True)
+        self.features = None
+
+        for name, module in self.model.named_modules():
+            if name == "features.20":
+                module.register_forward_hook(
+                    # lambda module, input, output : print(f"features.shape = {output.shape}")
+                    # lambda module, input, output : output 
+                    self.hook_fn(module)
+                )
+        
+    def hook_fn(self, module):
+        def fn(_, __, output):
+            self.features = output
+        return fn
+
+    def forward(self, x):
+        _ = self.model(x)
+        return self.features
+
+
+class build_DepthNet(nn.Module):
+    def __init__(self, num_classes, camera_num, view_num, cfg, factory, rearrange):
+        print(f"<===================== building DepthNet =========================>")
+        super().__init__()
+        self.reduced_dim = 128
+        self.vgg = VGGFeatures()
+        self.device = "cuda:0"
+        self.ffn = nn.Conv2d(512, self.reduced_dim, 7, 1, 0)
+        self.classifier = nn.Linear(self.reduced_dim, num_classes)
+        self.vis_count = 0
+        self.max_vis = 100
+
+
+    def forward(self, _, depth, label=None, cam_label= None, view_label=None):  # label is unused if self.cos_layer == 'no'
+        B = depth.shape[0]
+        # x = torch.repeat(depth, 3, axis=1)
+        # x = depth.half()
+        # if self.vis_count < self.max_vis:
+        #     if os.path.exists(f"vis"):
+        #         shutil.rmtree(f"vis")
+        #     os.mkdir(f"vis")
+        #     for batch_idx in range(B):
+        #         depth_img = depth[batch_idx][0]
+        #         rgb_img = (rgb[batch_idx].permute(1, 2, 0) + 0.5) * 255.0
+        #         rgb_img = torch.clamp(rgb_img, 0.0, 255.0).type(torch.int32) 
+        #         fig, axs = plt.subplots(1, 2)
+        #         axs[0].imshow(depth_img.cpu().numpy())
+        #         axs[1].imshow(rgb_img.cpu().numpy())
+        #         if not os.path.exists(f"vis/{label[batch_idx]}"):
+        #             os.mkdir(f"vis/{label[batch_idx]}")
+        #         plt.savefig(f"vis/{label[batch_idx]}/depth{self.vis_count}.jpg")
+        #         plt.close()
+        #         self.vis_count += 1
+        x = depth.half()
+        # print(f"it is actually this~!")
+        # print(f"x.dtype = {x.dtype}") 
+        # print(f"x.shape = {x.shape}")
+        x = self.vgg(x)  
+        # print(f"vgg.shape = {x.shape}")
+        x = self.ffn(x).squeeze(-1).squeeze(-1)
+        cls_score = self.classifier(x)
+        # print(f"cls_score.shape = {cls_score.shape}")
+        # print(f"cls_score.dtype = {cls_score.dtype}")
+        # print(f"final_embedding.shape = {x.shape}")
+        return cls_score, x
+
+
+class build_SimpleDepthNet(nn.Module):
+    def __init__(self, num_classes, camera_num, view_num, cfg, factory, rearrange):
+        print(f"<===================== building SimpleDepthNet =========================>")
+        super().__init__()
+        self.reduced_dim = 128
+        self.project_depth = nn.Sequential(
+            nn.Conv2d(1, self.reduced_dim // 2, 3, 2, 1),
+            nn.Conv2d(self.reduced_dim // 2, self.reduced_dim, 3, 2, 1),
+            nn.Conv2d(self.reduced_dim, self.reduced_dim, 3, 2, 1),
+        )
+
+        self.device = "cuda:0"
+        self.classifier = nn.Linear(self.reduced_dim, num_classes)
+
+
+    def forward(self, rgb, depth, label=None, cam_label= None, view_label=None):  # label is unused if self.cos_layer == 'no'
+        B = depth.shape[0]
+        x = depth
+        # x = torch.cat((rgb, depth), 1) 
+        x = self.project_depth(x).permute(0, 2, 3, 1)
+        x = x.reshape(B, -1, self.reduced_dim)
+        x = torch.mean(x, 1)
+        cls_score = self.classifier(x)
+        print(f"cls_score.shape = {cls_score.shape}")
+        print(f"cls_score.dtype = {cls_score.dtype}")
+        print(f"final_embedding.shape = {x.shape}")
+        return cls_score, x
+
+
 class build_FourDNet(nn.Module):
     def __init__(self, num_classes, camera_num, view_num, cfg, factory, rearrange):
         print(f"<===================== building FourDNet =========================>")
@@ -240,7 +372,6 @@ class build_FourDNet(nn.Module):
             self.base.load_param(model_path)
             print('Loading pretrained ImageNet model......from {}'.format(model_path))
         
-        self.classifier = nn.Linear(self.in_planes, num_classes)
 
         # reduce dimensionality of ViT features
         self.reduced_dim = 128
@@ -252,7 +383,7 @@ class build_FourDNet(nn.Module):
             nn.Conv2d(1, self.reduced_dim // 2, 3, 2, 1),
             nn.Conv2d(self.reduced_dim // 2, self.reduced_dim, 3, 2, 1),
             nn.Conv2d(self.reduced_dim, self.reduced_dim, 3, 2, 1),
-            nn.Conv2d(self.reduced_dim, self.reduced_dim, 3, 2, 1),
+            # nn.Conv2d(self.reduced_dim, self.reduced_dim, 3, 2, 1),
         )
         self.global_depth_feat = nn.Parameter(torch.randn(self.reduced_dim))
 
@@ -267,18 +398,188 @@ class build_FourDNet(nn.Module):
             nn.Sigmoid(),
         ) 
         self.r2d_attn_weights = nn.Sequential(
-            nn.Linear(self.reduced_dim, self.r2d_m * self.r2d_k)
+            nn.Linear(self.reduced_dim, self.r2d_m * self.r2d_k),
+            nn.Softmax(dim=-1)
         )
 
-    def forward(self, x, label=None, cam_label= None, view_label=None):  # label is unused if self.cos_layer == 'no'
-        features = self.base(x, cam_label=cam_label, view_label=view_label)
-        # print(f"features.shape = {features.shape}")
+        self.device = "cuda:0"
+        self.classifier = nn.Linear(self.reduced_dim, num_classes)
 
-        # global branch
+        self.d2d_k = 15 
+        self.d2d_m = 2
+        self.d2d_Q = nn.Linear(self.reduced_dim, self.reduced_dim)
+        self.d2d_V = nn.Linear(self.reduced_dim, self.reduced_dim)
+        self.d2d_selector = nn.Sequential(
+            nn.Linear(self.reduced_dim, 2 * self.d2d_m * self.d2d_k),
+            nn.Sigmoid(),
+        ) 
+        self.d2d_attn_weights = nn.Sequential(
+            nn.Linear(self.reduced_dim, self.d2d_m * self.d2d_k),
+            nn.Softmax(dim=-1)
+        )
+
+        # development stage
+        self.visualize = True
+        self.vis_count = 0
+        self.max_vis = 100
+
+    def forward(self, rgb, depth, label=None, cam_label= None, view_label=None):  # label is unused if self.cos_layer == 'no'
+        B = rgb.shape[0]
+        # print(f"torch.max(depth) = {torch.max(depth)}")
+        # print(f"torch.min(depth) = {torch.min(depth)}")
+        # print()
+        # print()
+        # depth = depth.half()
+        # print(f"len(np.unique(depth)) = {len(torch.unique(depth))}")
+        if self.vis_count < self.max_vis:
+            if os.path.exists(f"vis"):
+                shutil.rmtree(f"vis")
+            os.mkdir(f"vis")
+            for batch_idx in range(B):
+                depth_img = depth[batch_idx][0]
+                rgb_img = (rgb[batch_idx].permute(1, 2, 0) + 0.5) * 255.0
+                rgb_img = torch.clamp(rgb_img, 0.0, 255.0).type(torch.int32) 
+                fig, axs = plt.subplots(1, 2)
+                axs[0].imshow(depth_img.cpu().numpy())
+                axs[1].imshow(rgb_img.cpu().numpy())
+                if not os.path.exists(f"vis/{label[batch_idx]}"):
+                    os.mkdir(f"vis/{label[batch_idx]}")
+                plt.savefig(f"vis/{label[batch_idx]}/depth{self.vis_count}.jpg")
+                plt.close()
+                self.vis_count += 1
+        features = self.base(rgb, cam_label=cam_label, view_label=view_label)
+        N = features.shape[1] - 1
+        # global rgb features
         global_feat = features[:, 0]
-        final_embedding = global_feat 
+        global_feat = self.reduce_dims_global(global_feat)
+
+        # local rgb features
+        local_feat = features[:, 1:]
+        local_feat = self.reduce_dims(local_feat)
+
+        # concatenating local and global rgb features 
+        local_cat_global = torch.cat((global_feat.unsqueeze(1).repeat(1, N, 1), local_feat), -1)
+
+        # local depth features
+        local_depth_feat = self.project_depth(depth).permute(0, 2, 3, 1)
+        Hd, Wd = local_depth_feat.shape[-3], local_depth_feat.shape[-2]
+        local_depth_feat = local_depth_feat.reshape(B, Hd * Wd, self.reduced_dim)
+
+        # concatenating local and global depth features 
+        local_cat_global_depth = torch.cat((
+            self.global_depth_feat.unsqueeze(0).unsqueeze(0).repeat(B, Hd * Wd, 1),
+            local_depth_feat
+        ), -1)
+        local_cat_global_depth = self.merge_local_global_depth(local_cat_global_depth)
+        # local_cat_global_depth = local_depth_feat
+
+        """D2D Self Attention"""
+        q = self.d2d_Q(local_cat_global_depth)
+        v = self.d2d_V(local_cat_global_depth)
+
+        selector_outputs = self.d2d_selector(q)
+        attention_scores = self.d2d_attn_weights(q)
+        locations_x = selector_outputs[:, :, 0 : self.d2d_m * self.d2d_k]
+        locations_y = selector_outputs[:, :, self.d2d_m * self.d2d_k :] 
+
+        # find out nearest positions for each selected position
+        # x1, x2, y1, y2
+        nearest_pos = torch.zeros((B, Hd * Wd, self.d2d_m * self.d2d_k, 4))
+        stride_x = 1.0 / (Wd - 1)
+        stride_y = 1.0 / (Hd - 1)
+        nearest_pos[..., 0] = locations_x // stride_x
+        nearest_pos[..., 1] = torch.minimum(nearest_pos[..., 0] + 1, torch.tensor(Wd - 1))
+        nearest_pos[..., 2] = locations_y // stride_y
+        nearest_pos[..., 3] = torch.minimum(nearest_pos[..., 2] + 1, torch.tensor(Hd - 1))
+        nearest_pos = nearest_pos.type(torch.int32)
+        nearest_feat = torch.zeros((B, Hd * Wd, self.d2d_m * self.d2d_k, 4, v.shape[-1]))
+
+
+        # nearest_feat2 = torch.zeros((B, N, self.r2d_m * self.r2d_k, 4, v.shape[-1]))
+        # for batch_idx in range(B):
+        #     nearest_feat2[batch_idx, :, :, 0] = v[batch_idx, nearest_pos[batch_idx, :, :, 0] * Wd + nearest_pos[batch_idx, :, :, 3]]
+        #     nearest_feat2[batch_idx, :, :, 1] = v[batch_idx, nearest_pos[batch_idx, :, :, 1] * Wd + nearest_pos[batch_idx, :, :, 3]]
+        #     nearest_feat2[batch_idx, :, :, 2] = v[batch_idx, nearest_pos[batch_idx, :, :, 1] * Wd + nearest_pos[batch_idx, :, :, 2]]
+        #     nearest_feat2[batch_idx, :, :, 3] = v[batch_idx, nearest_pos[batch_idx, :, :, 0] * Wd + nearest_pos[batch_idx, :, :, 2]]
+        
+
+        nearest_pos = nearest_pos.to(self.device).type(torch.int64)
+        locations_x = locations_x.to(self.device)
+        locations_y = locations_y.to(self.device)
+        nearest_feat = nearest_feat.to(self.device)
+        pos0 = nearest_pos[:, :, :, 0] * Wd + nearest_pos[:, :, :, 3]
+        pos1 = nearest_pos[:, :, :, 1] * Wd + nearest_pos[:, :, :, 3]
+        pos2 = nearest_pos[:, :, :, 1] * Wd + nearest_pos[:, :, :, 2]
+        pos3 = nearest_pos[:, :, :, 0] * Wd + nearest_pos[:, :, :, 2]
+        nearest_feat[:, :, :, 0] = torch.gather(v.unsqueeze(1).expand(B, Hd * Wd, v.shape[-2], v.shape[-1]), 2, pos0.unsqueeze(-1).expand(*pos0.shape, self.reduced_dim))
+        nearest_feat[:, :, :, 1] = torch.gather(v.unsqueeze(1).expand(B, Hd * Wd, v.shape[-2], v.shape[-1]), 2, pos1.unsqueeze(-1).expand(*pos1.shape, self.reduced_dim))
+        nearest_feat[:, :, :, 2] = torch.gather(v.unsqueeze(1).expand(B, Hd * Wd, v.shape[-2], v.shape[-1]), 2, pos2.unsqueeze(-1).expand(*pos2.shape, self.reduced_dim))
+        nearest_feat[:, :, :, 3] = torch.gather(v.unsqueeze(1).expand(B, Hd * Wd, v.shape[-2], v.shape[-1]), 2, pos3.unsqueeze(-1).expand(*pos3.shape, self.reduced_dim))
+
+        # assert torch.allclose(nearest_feat, nearest_feat2.to(self.device))
+        # print(f"assertion valid!")
+
+        interpolated_feat = bilinear_interpolation(nearest_feat, nearest_pos[..., 0], nearest_pos[..., 1], nearest_pos[..., 2], nearest_pos[..., 3], locations_x * (Wd - 1), locations_y * (Hd - 1)).squeeze(-1).squeeze(-1)
+
+        # print(f"interpolated_feat.shape = {interpolated_feat.shape}")
+        d2d_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
+        local_cat_global_depth = local_cat_global_depth + d2d_feat
+
+        """R2D Cross Attention"""
+        q = self.r2d_Q(local_cat_global)
+        v = self.r2d_V(local_cat_global_depth)
+
+        selector_outputs = self.r2d_selector(q)
+        attention_scores = self.r2d_attn_weights(q)
+        locations_x = selector_outputs[:, :, 0 : self.r2d_m * self.r2d_k]
+        locations_y = selector_outputs[:, :, self.r2d_m * self.r2d_k :] 
+
+        # find out nearest positions for each selected position
+        # x1, x2, y1, y2
+        nearest_pos = torch.zeros((B, N, self.r2d_m * self.r2d_k, 4))
+        stride_x = 1.0 / (Wd - 1)
+        stride_y = 1.0 / (Hd - 1)
+        nearest_pos[..., 0] = locations_x // stride_x
+        nearest_pos[..., 1] = torch.minimum(nearest_pos[..., 0] + 1, torch.tensor(Wd - 1))
+        nearest_pos[..., 2] = locations_y // stride_y
+        nearest_pos[..., 3] = torch.minimum(nearest_pos[..., 2] + 1, torch.tensor(Hd - 1))
+        nearest_pos = nearest_pos.type(torch.int32)
+        nearest_feat = torch.zeros((B, N, self.r2d_m * self.r2d_k, 4, v.shape[-1]))
+
+
+        # nearest_feat2 = torch.zeros((B, N, self.r2d_m * self.r2d_k, 4, v.shape[-1]))
+        # for batch_idx in range(B):
+        #     nearest_feat2[batch_idx, :, :, 0] = v[batch_idx, nearest_pos[batch_idx, :, :, 0] * Wd + nearest_pos[batch_idx, :, :, 3]]
+        #     nearest_feat2[batch_idx, :, :, 1] = v[batch_idx, nearest_pos[batch_idx, :, :, 1] * Wd + nearest_pos[batch_idx, :, :, 3]]
+        #     nearest_feat2[batch_idx, :, :, 2] = v[batch_idx, nearest_pos[batch_idx, :, :, 1] * Wd + nearest_pos[batch_idx, :, :, 2]]
+        #     nearest_feat2[batch_idx, :, :, 3] = v[batch_idx, nearest_pos[batch_idx, :, :, 0] * Wd + nearest_pos[batch_idx, :, :, 2]]
+        
+
+        nearest_pos = nearest_pos.to(self.device).type(torch.int64)
+        locations_x = locations_x.to(self.device)
+        locations_y = locations_y.to(self.device)
+        nearest_feat = nearest_feat.to(self.device)
+        pos0 = nearest_pos[:, :, :, 0] * Wd + nearest_pos[:, :, :, 3]
+        pos1 = nearest_pos[:, :, :, 1] * Wd + nearest_pos[:, :, :, 3]
+        pos2 = nearest_pos[:, :, :, 1] * Wd + nearest_pos[:, :, :, 2]
+        pos3 = nearest_pos[:, :, :, 0] * Wd + nearest_pos[:, :, :, 2]
+        nearest_feat[:, :, :, 0] = torch.gather(v.unsqueeze(1).expand(B, N, v.shape[-2], v.shape[-1]), 2, pos0.unsqueeze(-1).expand(*pos0.shape, self.reduced_dim))
+        nearest_feat[:, :, :, 1] = torch.gather(v.unsqueeze(1).expand(B, N, v.shape[-2], v.shape[-1]), 2, pos1.unsqueeze(-1).expand(*pos1.shape, self.reduced_dim))
+        nearest_feat[:, :, :, 2] = torch.gather(v.unsqueeze(1).expand(B, N, v.shape[-2], v.shape[-1]), 2, pos2.unsqueeze(-1).expand(*pos2.shape, self.reduced_dim))
+        nearest_feat[:, :, :, 3] = torch.gather(v.unsqueeze(1).expand(B, N, v.shape[-2], v.shape[-1]), 2, pos3.unsqueeze(-1).expand(*pos3.shape, self.reduced_dim))
+
+        # assert torch.allclose(nearest_feat, nearest_feat2.to(self.device))
+        # print(f"assertion valid!")
+
+        interpolated_feat = bilinear_interpolation(nearest_feat, nearest_pos[..., 0], nearest_pos[..., 1], nearest_pos[..., 2], nearest_pos[..., 3], locations_x * (Wd - 1), locations_y * (Hd - 1)).squeeze(-1).squeeze(-1)
+
+        r2d_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
+        r2d_feat = torch.mean(r2d_feat, -2)
+        final_depth_feat = torch.mean(local_cat_global_depth, dim=-2)
+        final_embedding = final_depth_feat 
+        # final_embedding = r2d_feat 
+        # final_embedding = global_feat 
         cls_score = self.classifier(final_embedding)
-        print(f"completed iteration!")
         return cls_score, final_embedding
 
 
@@ -375,7 +676,8 @@ class build_transformer_local(nn.Module):
         print('using divide_length size:{}'.format(self.divide_length))
         self.rearrange = rearrange
 
-    def forward(self, x, label=None, cam_label= None, view_label=None):  # label is unused if self.cos_layer == 'no'
+    def forward(self, rgb, depth, label=None, cam_label= None, view_label=None):  # label is unused if self.cos_layer == 'no'
+        x = rgb
 
         features = self.base(x, cam_label=cam_label, view_label=view_label)
 
@@ -472,6 +774,8 @@ def make_model(cfg, num_class, camera_num, view_num):
     #     model = Backbone(num_class, cfg)
     #     print('===========building ResNet===========')
 
-    model = build_FourDNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
+    # model = build_FourDNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
+    # model = build_SimpleDepthNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
+    model = build_DepthNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     # model = build_transformer_local(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     return model
