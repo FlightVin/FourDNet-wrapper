@@ -332,15 +332,15 @@ class build_SimpleDepthNet(nn.Module):
 
     def forward(self, rgb, depth, label=None, cam_label= None, view_label=None):  # label is unused if self.cos_layer == 'no'
         B = depth.shape[0]
-        x = depth
+        x = depth.half()
         # x = torch.cat((rgb, depth), 1) 
         x = self.project_depth(x).permute(0, 2, 3, 1)
         x = x.reshape(B, -1, self.reduced_dim)
         x = torch.mean(x, 1)
         cls_score = self.classifier(x)
-        print(f"cls_score.shape = {cls_score.shape}")
-        print(f"cls_score.dtype = {cls_score.dtype}")
-        print(f"final_embedding.shape = {x.shape}")
+        # print(f"cls_score.shape = {cls_score.shape}")
+        # print(f"cls_score.dtype = {cls_score.dtype}")
+        # print(f"final_embedding.shape = {x.shape}")
         return cls_score, x
 
 
@@ -776,6 +776,6 @@ def make_model(cfg, num_class, camera_num, view_num):
 
     # model = build_FourDNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     # model = build_SimpleDepthNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
-    model = build_DepthNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
-    # model = build_transformer_local(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
+    # model = build_DepthNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
+    model = build_transformer_local(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     return model

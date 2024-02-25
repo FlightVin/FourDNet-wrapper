@@ -8,6 +8,14 @@ from utils.metrics import R1_mAP_eval
 from torch.cuda import amp
 import torch.distributed as dist
 from tqdm import tqdm
+import wandb
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+import shutil
+WANDB = True
+EMBEDDING_DIM = 3840
+NUM_INSTANCES = 12
+EXPERIMENT_NAME = "TransReID_38_occluded" 
 
 def do_train_4DNet(cfg,
              model,
@@ -19,6 +27,13 @@ def do_train_4DNet(cfg,
              scheduler,
              loss_fn,
              num_query, local_rank):
+    if WANDB:
+        wandb.init(project="ReID", name=EXPERIMENT_NAME)
+    if not os.path.exists(f"logs"):
+        os.mkdir(f"logs")
+    if os.path.exists(f"logs/{EXPERIMENT_NAME}"):
+        shutil.rmtree(f"logs/{EXPERIMENT_NAME}")
+    os.mkdir(f"logs/{EXPERIMENT_NAME}")
     log_period = cfg.SOLVER.LOG_PERIOD
     checkpoint_period = cfg.SOLVER.CHECKPOINT_PERIOD
     eval_period = cfg.SOLVER.EVAL_PERIOD
@@ -80,7 +95,7 @@ def do_train_4DNet(cfg,
             loss_meter.update(loss.item(), img.shape[0])
             acc_meter.update(acc, 1)
 
-            loop.set_postfix(loss = loss_meter.avg, acc = acc_meter.avg, lr = scheduler._get_lr(epoch)[0])
+            loop.set_postfix(loss = loss_meter.avg, acc = acc_meter.avg.item(), lr = scheduler._get_lr(epoch)[0])
             torch.cuda.synchronize()
             # if (n_iter + 1) % log_period == 0:
             #     logger.info("Epoch[{}] Iteration[{}/{}] Loss: {:.3f}, Acc: {:.3f}, Base Lr: {:.2e}"
@@ -102,10 +117,12 @@ def do_train_4DNet(cfg,
                                os.path.join(cfg.OUTPUT_DIR, cfg.MODEL.NAME + '_{}.pth'.format(epoch)))
             else:
                 torch.save(model.state_dict(),
-                           os.path.join(cfg.OUTPUT_DIR, cfg.MODEL.NAME + '_{}.pth'.format(epoch)))
+                           os.path.join(f"logs/{EXPERIMENT_NAME}/{epoch}.pth"))
 
         if epoch % eval_period == 0:
             if cfg.MODEL.DIST_TRAIN:
+                val_acc_meter = AverageMeter()
+                val_loss_meter = AverageMeter()
                 if dist.get_rank() == 0:
                     model.eval()
                     for n_iter, (img, vid, camid, camids, target_view, _) in enumerate(val_loader):
@@ -113,29 +130,90 @@ def do_train_4DNet(cfg,
                             img = img.to(device)
                             camids = camids.to(device)
                             target_view = target_view.to(device)
-                            feat = model(img, cam_label=camids, view_label=target_view)
-                            evaluator.update((feat, vid, camid))
-                    cmc, mAP, _, _, _, _, _ = evaluator.compute()
-                    logger.info("Validation Results - Epoch: {}".format(epoch))
-                    logger.info("mAP: {:.1%}".format(mAP))
-                    for r in [1, 5, 10]:
-                        logger.info("CMC curve, Rank-{:<3}:{:.1%}".format(r, cmc[r - 1]))
+                            score, feat = model(img, cam_label=camids, view_label=target_view)
+                            loss = loss_fn(score, feat, target, target_cam)
+                            if isinstance(score, list):
+                                acc = (score[0].max(1)[1] == target).float().mean()
+                            else:
+                                acc = (score.max(1)[1] == target).float().mean()
+
+                            val_loss_meter.update(loss.item(), img.shape[0])
+                            val_acc_meter.update(acc, 1)
+                            # evaluator.update((feat, vid, camid))
+                    # cmc, mAP, _, _, _, _, _ = evaluator.compute()
+                    # logger.info("Validation Results - Epoch: {}".format(epoch))
+                    # logger.info("mAP: {:.1%}".format(mAP))
+                    # for r in [1, 5, 10]:
+                    #     logger.info("CMC curve, Rank-{:<3}:{:.1%}".format(r, cmc[r - 1]))
                     torch.cuda.empty_cache()
             else:
+                val_acc_meter = AverageMeter()
+                val_loss_meter = AverageMeter()
                 model.eval()
-                for n_iter, (img, vid, camid, camids, target_view, _) in enumerate(val_loader):
-                    with torch.no_grad():
+                batch_size = cfg.SOLVER.IMS_PER_BATCH
+                embeddings = torch.empty((len(val_loader) * batch_size, EMBEDDING_DIM))
+                count = 0
+                with torch.no_grad():
+                    for n_iter, (img, depth, vid, target_cam, target_view) in enumerate(val_loader):
                         img = img.to(device)
-                        camids = camids.to(device)
+                        depth = depth.to(device)
+                        target = vid.to(device)
+                        target_cam = target_cam.to(device)
                         target_view = target_view.to(device)
-                        feat = model(img, cam_label=camids, view_label=target_view)
-                        evaluator.update((feat, vid, camid))
-                cmc, mAP, _, _, _, _, _ = evaluator.compute()
-                logger.info("Validation Results - Epoch: {}".format(epoch))
-                logger.info("mAP: {:.1%}".format(mAP))
-                for r in [1, 5, 10]:
-                    logger.info("CMC curve, Rank-{:<3}:{:.1%}".format(r, cmc[r - 1]))
-                torch.cuda.empty_cache()
+                        feat = model(img, depth, target, cam_label=target_cam, view_label=target_view )
+                        feat = feat.cpu()
+                        # loss = loss_fn(score, feat, target, target_cam)
+                        embeddings[n_iter * batch_size : n_iter * batch_size + img.shape[0]] = feat
+                        count += img.shape[0]
+                        # if isinstance(score, list):
+                        #     acc = (score[0].max(1)[1] == target).float().mean()
+                        # else:
+                        #     acc = (score.max(1)[1] == target).float().mean()
+
+                        # val_loss_meter.update(loss.item(), img.shape[0])
+                        # val_acc_meter.update(acc, 1)
+                    embeddings = embeddings[:count]
+                    # scores = F.cosine_similarity(embeddings.unsqueeze(0).repeat(count, 1, 1), embeddings.unsqueeze(1).repeat(1, count, 1))
+
+                    print(f"computing the confusion matrix...")
+                    scores = torch.zeros((count, count))
+                    for i in tqdm(range(scores.shape[0])):
+                        for j in range(scores.shape[1]):
+                            scores[i][j] = embeddings[i] @ embeddings[j] / (torch.norm(embeddings[i]) * torch.norm(embeddings[j]))
+                    positive_score = sum(torch.sum(scores[i : i + NUM_INSTANCES, i : i + NUM_INSTANCES]) for i in range(0, scores.shape[0], NUM_INSTANCES))
+                    negative_score = torch.sum(scores) - positive_score
+                    positive_score = positive_score / (count * count)
+                    negative_score = negative_score / (count * count)
+                    plt.figure(figsize=(20, 20))
+                    plt.imshow(scores)
+                    plt.savefig(f"logs/{EXPERIMENT_NAME}/heatmap_{epoch}.jpg")
+
+
+                    if WANDB:
+                        wandb.log({
+                            f"train_acc": acc_meter.avg,
+                            f"train_loss": loss_meter.avg,
+                            f"lr": scheduler._get_lr(epoch)[0],
+                            f"epoch": epoch,
+                            f"positive_score": positive_score,
+                            f"negative_score": negative_score,
+                            f"heatmap": wandb.Image(f"logs/{EXPERIMENT_NAME}/heatmap_{epoch}.jpg")
+                        })
+            torch.cuda.empty_cache()
+
+                # for n_iter, (img, vid, camid, camids, target_view, _) in enumerate(val_loader):
+                #     with torch.no_grad():
+                #         img = img.to(device)
+                #         camids = camids.to(device)
+                #         target_view = target_view.to(device)
+                #         feat = model(img, cam_label=camids, view_label=target_view)
+                #         evaluator.update((feat, vid, camid))
+                # cmc, mAP, _, _, _, _, _ = evaluator.compute()
+                # logger.info("Validation Results - Epoch: {}".format(epoch))
+                # logger.info("mAP: {:.1%}".format(mAP))
+                # for r in [1, 5, 10]:
+                #     logger.info("CMC curve, Rank-{:<3}:{:.1%}".format(r, cmc[r - 1]))
+                # torch.cuda.empty_cache()
 
 
 def do_inference(cfg,

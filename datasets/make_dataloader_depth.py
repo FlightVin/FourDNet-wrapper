@@ -139,10 +139,11 @@ def make_dataloader_depth(cfg):
 
     val_loader = DataLoader(
         val_set,
-        batch_size=cfg.TEST.IMS_PER_BATCH,
+        batch_size=cfg.SOLVER.IMS_PER_BATCH,
         shuffle=False,
         num_workers=num_workers,
-        collate_fn=val_collate_fn,
+        # collate_fn=val_collate_fn,
+        collate_fn=train_collate_fn,
     )
     # train_loader_normal = DataLoader(
     #     train_set_normal,

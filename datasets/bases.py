@@ -124,15 +124,16 @@ class RGBD_Dataset(Dataset):
         # print(f"loaded the depth successfully!")
         # depth = cv2.resize(depth, (128, 256))
 
-        """for VGG"""
+        # """for VGG"""
         depth = cv2.resize(depth, (224, 224))
         depth = np.repeat(depth[:, :, None], 3, axis=-1)
         # print(f"depth.shape = {depth.shape}")
         depth = np.clip(depth, self.min_depth, self.max_depth)
         depth = depth / (self.max_depth - self.min_depth)
+        # depth = depth - 0.5
         depth = depth - self.depth_mean[None, None, :]
         depth = depth / self.depth_std[None, None, :]
-        # assert img_path.find(".npy") == -1
+        # # assert img_path.find(".npy") == -1
         img = read_image(img_path)
 
         if self.transform is not None:
