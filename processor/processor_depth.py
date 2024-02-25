@@ -54,7 +54,7 @@ def do_train_4DNet(cfg,
     acc_meter = AverageMeter()
 
     evaluator = R1_mAP_eval(num_query, max_rank=50, feat_norm=cfg.TEST.FEAT_NORM)
-    scaler = amp.GradScaler()
+    # scaler = amp.GradScaler()
     # train
     for epoch in range(1, epochs + 1):
         start_time = time.time()
@@ -72,14 +72,17 @@ def do_train_4DNet(cfg,
             target = vid.to(device)
             target_cam = target_cam.to(device)
             target_view = target_view.to(device)
-            with amp.autocast(enabled=True):
-                score, feat = model(img, depth, target, cam_label=target_cam, view_label=target_view )
-                loss = loss_fn(score, feat, target, target_cam)
+            # with amp.autocast(enabled=True):
+            score, feat = model(img, depth, target, cam_label=target_cam, view_label=target_view )
+            loss = loss_fn(score, feat, target, target_cam)
 
-            scaler.scale(loss).backward()
-
-            scaler.step(optimizer)
-            scaler.update()
+            # scaler.scale(loss).backward()
+            # # nn.utils.clip_grad_norm_(model.parameters(), 1000.0)
+            # scaler.step(optimizer)
+            # scaler.update()
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), 1000.0)
+            optimizer.step()
 
             # this condition is not met for Market dataset
             if 'center' in cfg.MODEL.METRIC_LOSS_TYPE:

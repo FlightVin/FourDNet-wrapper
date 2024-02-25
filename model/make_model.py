@@ -290,7 +290,7 @@ class build_DepthNet2(nn.Module):
     def forward(self, _, depth, label=None, cam_label= None, view_label=None):  # label is unused if self.cos_layer == 'no'
         B = depth.shape[0]
         if self.training:
-            x = depth.half()
+            x = depth.float()
         else:
             x = depth.float()
         features4, features20 = self.vgg(x)  
