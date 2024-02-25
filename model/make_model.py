@@ -301,7 +301,10 @@ class build_DepthNet(nn.Module):
         #         plt.savefig(f"vis/{label[batch_idx]}/depth{self.vis_count}.jpg")
         #         plt.close()
         #         self.vis_count += 1
-        x = depth.half()
+        if self.training:
+            x = depth.half()
+        else:
+            x = depth.float()
         # print(f"it is actually this~!")
         # print(f"x.dtype = {x.dtype}") 
         # print(f"x.shape = {x.shape}")
@@ -312,7 +315,10 @@ class build_DepthNet(nn.Module):
         # print(f"cls_score.shape = {cls_score.shape}")
         # print(f"cls_score.dtype = {cls_score.dtype}")
         # print(f"final_embedding.shape = {x.shape}")
-        return cls_score, x
+        if self.training:
+            return cls_score, x
+        else:
+            return x
 
 
 class build_SimpleDepthNet(nn.Module):
@@ -776,6 +782,6 @@ def make_model(cfg, num_class, camera_num, view_num):
 
     # model = build_FourDNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     # model = build_SimpleDepthNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
-    # model = build_DepthNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
-    model = build_transformer_local(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
+    model = build_DepthNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
+    # model = build_transformer_local(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     return model

@@ -12,10 +12,10 @@ import wandb
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import shutil
-WANDB = True
-EMBEDDING_DIM = 3840
+WANDB = False
+EMBEDDING_DIM = 128
 NUM_INSTANCES = 12
-EXPERIMENT_NAME = "TransReID_38_occluded" 
+EXPERIMENT_NAME = "DepthNet_repeated" 
 
 def do_train_4DNet(cfg,
              model,
