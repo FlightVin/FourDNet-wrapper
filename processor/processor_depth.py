@@ -12,7 +12,7 @@ import wandb
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import shutil
-WANDB = True
+WANDB = False
 EMBEDDING_DIM = 128
 NUM_INSTANCES = 12
 EXPERIMENT_NAME = "DepthNet2" 
@@ -72,9 +72,9 @@ def do_train_4DNet(cfg,
             target = vid.to(device)
             target_cam = target_cam.to(device)
             target_view = target_view.to(device)
-            # with amp.autocast(enabled=True):
-            score, feat = model(img, depth, target, cam_label=target_cam, view_label=target_view )
-            loss = loss_fn(score, feat, target, target_cam)
+            with amp.autocast(enabled=True):
+                score, feat = model(img, depth, target, cam_label=target_cam, view_label=target_view )
+                loss = loss_fn(score, feat, target, target_cam)
 
             # scaler.scale(loss).backward()
             # # nn.utils.clip_grad_norm_(model.parameters(), 1000.0)
