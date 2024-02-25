@@ -243,29 +243,72 @@ class build_transformer(nn.Module):
             self.state_dict()[i].copy_(param_dict[i])
         print('Loading pretrained model for finetuning from {}'.format(model_path))
 
-
 class VGGFeatures(nn.Module):
     def __init__(self):
         super().__init__()
         self.model = torch.hub.load('pytorch/vision:v0.10.0', 'vgg11', pretrained=True)
-        self.features = None
+        self.features4 = None
+        self.features20 = None
+        # print(self.model)
 
         for name, module in self.model.named_modules():
-            if name == "features.20":
+            if name == "features.4" or name == "features.20":
                 module.register_forward_hook(
                     # lambda module, input, output : print(f"features.shape = {output.shape}")
                     # lambda module, input, output : output 
-                    self.hook_fn(module)
+                    self.hook_fn(module, name)
                 )
         
-    def hook_fn(self, module):
+    def hook_fn(self, module, name):
         def fn(_, __, output):
-            self.features = output
+            if name == "features.4":
+                self.features4 = output
+            if name == "features.20":
+                self.features20 = output
         return fn
 
     def forward(self, x):
         _ = self.model(x)
-        return self.features
+        return self.features4, self.features20
+
+
+class build_DepthNet2(nn.Module):
+    def __init__(self, num_classes, camera_num, view_num, cfg, factory, rearrange):
+        print(f"<===================== building DepthNet =========================>")
+        super().__init__()
+        self.reduced_dim = 128
+        self.vgg = VGGFeatures()
+        self.device = "cuda:0"
+        self.merge_local_global_feat = nn.Linear(128 + 512, self.reduced_dim)
+        self.classifier = nn.Linear(self.reduced_dim, num_classes)
+        self.vis_count = 0
+        self.max_vis = 100
+        self.ffn = nn.Conv2d(512, self.reduced_dim, 7, 1, 0)
+        self.classifier = nn.Linear(self.reduced_dim, num_classes)
+
+
+    def forward(self, _, depth, label=None, cam_label= None, view_label=None):  # label is unused if self.cos_layer == 'no'
+        B = depth.shape[0]
+        if self.training:
+            x = depth.half()
+        else:
+            x = depth.float()
+        features4, features20 = self.vgg(x)  
+        global_feat = torch.mean(features20.reshape(B, 512, 49), -1)
+        # print(f"features4.shape = {features4.shape}")
+        local_cat_global_feat = torch.cat((
+            features4.reshape(B, 128, 112 * 112).permute(0, 2, 1),
+            global_feat.unsqueeze(1).repeat(1, 112 * 112, 1)
+        ), -1)
+        x = self.merge_local_global_feat(local_cat_global_feat)
+        x = torch.mean(x, -2)
+        # x = features20
+        # x = self.ffn(x).squeeze(-1).squeeze(-1)
+        cls_score = self.classifier(x)
+        if self.training:
+            return cls_score, x
+        else:
+            return x
 
 
 class build_DepthNet(nn.Module):
@@ -308,8 +351,9 @@ class build_DepthNet(nn.Module):
         # print(f"it is actually this~!")
         # print(f"x.dtype = {x.dtype}") 
         # print(f"x.shape = {x.shape}")
-        x = self.vgg(x)  
+        features4, features20 = self.vgg(x)  
         # print(f"vgg.shape = {x.shape}")
+        x = features20
         x = self.ffn(x).squeeze(-1).squeeze(-1)
         cls_score = self.classifier(x)
         # print(f"cls_score.shape = {cls_score.shape}")
@@ -378,7 +422,6 @@ class build_FourDNet(nn.Module):
             self.base.load_param(model_path)
             print('Loading pretrained ImageNet model......from {}'.format(model_path))
         
-
         # reduce dimensionality of ViT features
         self.reduced_dim = 128
         self.reduce_dims = nn.Linear(self.in_planes, self.reduced_dim)
@@ -782,6 +825,7 @@ def make_model(cfg, num_class, camera_num, view_num):
 
     # model = build_FourDNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     # model = build_SimpleDepthNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
-    model = build_DepthNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
+    # model = build_DepthNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
+    model = build_DepthNet2(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     # model = build_transformer_local(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     return model
