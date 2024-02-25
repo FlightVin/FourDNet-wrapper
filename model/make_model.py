@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from .backbones.resnet import ResNet, Bottleneck
 import copy
 from .backbones.vit_pytorch import vit_base_patch16_224_TransReID, vit_small_patch16_224_TransReID, deit_small_patch16_224_TransReID
@@ -8,6 +9,8 @@ import time
 import matplotlib.pyplot as plt
 import os
 import shutil
+import numpy as np 
+import cv2
 
 def bilinear_interpolation(f, x1, x2, y1, y2, x, y):
     x1 = x1.type(torch.float32) 
@@ -19,6 +22,7 @@ def bilinear_interpolation(f, x1, x2, y1, y2, x, y):
     h = y2 - y1
     w = x2 - x1
     assert torch.all(h >= 0) and torch.all(w >= 0)
+    assert torch.all(h <= 1) and torch.all(w <= 1)
     coeff = 1 / (h * w)
     coeff[(h == 0) | (w == 0)] = 2
     x = torch.cat(((x2 - x).unsqueeze(-1), (x - x1).unsqueeze(-1)), -1)
@@ -272,6 +276,55 @@ class VGGFeatures(nn.Module):
         return self.features4, self.features20
 
 
+class build_DepthNet3(nn.Module):
+    def __init__(self, num_classes, camera_num, view_num, cfg, factory, rearrange):
+        print(f"<===================== building DepthNet3 =========================>")
+        super().__init__()
+        self.reduced_dim = 128
+        self.vgg = VGGFeatures()
+        self.device = "cuda:0"
+        self.merge_local_global_feat = nn.Linear(128 + 128, self.reduced_dim)
+        self.ffn_global = nn.Conv2d(512, 128, 3, 1, 1)
+        self.classifier = nn.Linear(self.reduced_dim, num_classes)
+        self.vis_count = 0
+        self.max_vis = 100
+        self.classifier = nn.Linear(self.reduced_dim, num_classes)
+
+
+    def forward(self, _, depth, label=None, cam_label= None, view_label=None):  # label is unused if self.cos_layer == 'no'
+        B = depth.shape[0]
+        depth = depth.float()
+        features4, features20 = self.vgg(depth)  
+        # features4.shape = (B, 128, 112, 112)
+        features20 = F.interpolate(features20, (112, 112))
+        global_feat = self.ffn_global(features20)
+        local_cat_global_feat = torch.cat((
+            global_feat,
+            features4
+        ), 1).permute(0, 2, 3, 1).reshape(B, 112 * 112, 128 + 128)
+        x = self.merge_local_global_feat(local_cat_global_feat)
+        x = torch.mean(x, -2)
+        cls_score = self.classifier(x)
+        if self.training:
+            return cls_score, x
+        else:
+            return x
+
+
+class build_DepthNet(nn.Module):
+    def __init__(self, num_classes, camera_num, view_num, cfg, factory, rearrange):
+        print(f"<===================== building DepthNet =========================>")
+        super().__init__()
+        self.reduced_dim = 128
+        self.vgg = VGGFeatures()
+        self.device = "cuda:0"
+        self.ffn = nn.Conv2d(512, self.reduced_dim, 7, 1, 0)
+        self.classifier = nn.Linear(self.reduced_dim, num_classes)
+        self.vis_count = 0
+        self.max_vis = 100
+
+
+
 class build_DepthNet2(nn.Module):
     def __init__(self, num_classes, camera_num, view_num, cfg, factory, rearrange):
         print(f"<===================== building DepthNet =========================>")
@@ -463,9 +516,9 @@ class build_FourDNet(nn.Module):
         self.classifier = nn.Linear(self.reduced_dim, num_classes)
 
         # development stage
-        self.visualize = False
+        self.visualize = True
         self.vis_count = 0
-        self.max_vis = 100
+        self.max_vis = 10
 
     def forward(self, rgb, depth, label=None, cam_label= None, view_label=None):  # label is unused if self.cos_layer == 'no'
         B = rgb.shape[0]
@@ -475,22 +528,19 @@ class build_FourDNet(nn.Module):
         # print()
         # depth = depth.half()
         # print(f"len(np.unique(depth)) = {len(torch.unique(depth))}")
-        if self.visualize and self.vis_count < self.max_vis:
-            if os.path.exists(f"vis"):
-                shutil.rmtree(f"vis")
-            os.mkdir(f"vis")
-            for batch_idx in range(B):
-                depth_img = depth[batch_idx][0]
-                rgb_img = (rgb[batch_idx].permute(1, 2, 0) + 0.5) * 255.0
-                rgb_img = torch.clamp(rgb_img, 0.0, 255.0).type(torch.int32) 
-                fig, axs = plt.subplots(1, 2)
-                axs[0].imshow(depth_img.cpu().numpy())
-                axs[1].imshow(rgb_img.cpu().numpy())
-                if not os.path.exists(f"vis/{label[batch_idx]}"):
-                    os.mkdir(f"vis/{label[batch_idx]}")
-                plt.savefig(f"vis/{label[batch_idx]}/depth{self.vis_count}.jpg")
-                plt.close()
-                self.vis_count += 1
+        # if self.visualize and self.vis_count < self.max_vis:
+        #     for batch_idx in range(B):
+        #         depth_img = depth[batch_idx][0]
+        #         rgb_img = (rgb[batch_idx].permute(1, 2, 0) + 0.5) * 255.0
+        #         rgb_img = torch.clamp(rgb_img, 0.0, 255.0).type(torch.int32) 
+        #         fig, axs = plt.subplots(1, 2)
+        #         axs[0].imshow(depth_img.cpu().numpy())
+        #         axs[1].imshow(rgb_img.cpu().numpy())
+        #         if not os.path.exists(f"vis/{label[batch_idx]}"):
+        #             os.mkdir(f"vis/{label[batch_idx]}")
+        #         plt.savefig(f"vis/{label[batch_idx]}/depth{self.vis_count}.jpg")
+        #         plt.close()
+        #         self.vis_count += 1
 
         depth = depth.float()
         rgb = rgb.float()
@@ -594,6 +644,31 @@ class build_FourDNet(nn.Module):
         nearest_feat[:, :, :, 1] = torch.gather(v.unsqueeze(1).expand(B, N, v.shape[-2], v.shape[-1]), 2, pos1.unsqueeze(-1).expand(*pos1.shape, self.reduced_dim))
         nearest_feat[:, :, :, 2] = torch.gather(v.unsqueeze(1).expand(B, N, v.shape[-2], v.shape[-1]), 2, pos2.unsqueeze(-1).expand(*pos2.shape, self.reduced_dim))
         nearest_feat[:, :, :, 3] = torch.gather(v.unsqueeze(1).expand(B, N, v.shape[-2], v.shape[-1]), 2, pos3.unsqueeze(-1).expand(*pos3.shape, self.reduced_dim))
+
+
+        locs_x = locations_x.detach().cpu().numpy()
+        locs_y = locations_y.detach().cpu().numpy()
+        if self.visualize and self.vis_count < self.max_vis:
+            for batch_idx in range(B):
+                for query_idx in range(N):
+                    canvas = np.zeros((Hd * 10, Wd * 10, 3)).astype(np.uint8) 
+                    canvas.fill(255)
+                    for idx in range(self.r2d_m * self.r2d_k):
+                        x = int(nearest_pos[batch_idx, query_idx, idx, 0])
+                        y = int(nearest_pos[batch_idx, query_idx, idx, 2])
+                        cv2.circle(canvas, (x * 10, y * 10), 2, (255, 0, 0), 2)
+                        text = f"({locs_x[batch_idx, query_idx, idx]}, {locs_y[batch_idx, query_idx, idx]})"
+                        position = (x * 10, y * 10)  # Coordinates of the text (top-left corner)
+                        font = cv2.FONT_HERSHEY_SIMPLEX
+                        scale = 0.33  # Font scale factor
+                        color = (255, 0, 0)  # BGR color (blue in this case)
+                        thickness = 2  # Thickness of the text
+                        # Put the text on the image
+                        cv2.putText(canvas, text, position, font, scale, color, thickness)
+                    cv2.imwrite(f"vis_positions/{self.vis_count}.jpg", canvas)
+                    self.vis_count += 1 
+
+
 
         # print(f"nearest_feat.shape = {nearest_feat.shape}")
 
@@ -813,9 +888,10 @@ def make_model(cfg, num_class, camera_num, view_num):
     #     model = Backbone(num_class, cfg)
     #     print('===========building ResNet===========')
 
-    model = build_FourDNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
+    # model = build_FourDNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     # model = build_SimpleDepthNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     # model = build_DepthNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     # model = build_DepthNet2(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
+    model = build_DepthNet3(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     # model = build_transformer_local(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     return model
