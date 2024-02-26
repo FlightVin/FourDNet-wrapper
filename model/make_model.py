@@ -448,16 +448,19 @@ class build_SimpleDepthNet(nn.Module):
 
 
 class build_FourDNet(nn.Module):
-    def __init__(self, num_classes, camera_num, view_num, cfg, factory, gpu1, gpu2, rearrange):
+    def __init__(self, num_classes, camera_num, view_num, cfg, factory, gpu0, gpu1, target_gpu, rearrange):
         print(f"<===================== building FourDNet =========================>")
-        super(build_FourDNet, self).__init__()
+        super().__init__()
         model_path = cfg.MODEL.PRETRAIN_PATH
         pretrain_choice = cfg.MODEL.PRETRAIN_CHOICE
         self.neck = cfg.MODEL.NECK
         self.neck_feat = cfg.TEST.NECK_FEAT
         self.in_planes = 768
-        self.gpu1 = gpu1
-        self.gpu2 = gpu2
+        self.gpu0 = int(gpu0)
+        self.gpu1 = int(gpu1)
+        self.target_gpu = int(target_gpu)
+        
+        print(f"using model parallel with GPU0 = {self.gpu0}, GPU1 = {self.gpu1} and TARGET_GPU = {self.target_gpu}")
 
         print('using Transformer_type: {} as a backbone'.format(cfg.MODEL.TRANSFORMER_TYPE))
 
@@ -474,7 +477,7 @@ class build_FourDNet(nn.Module):
 
 
         # defining the RGB backbone
-        self.base = factory[cfg.MODEL.TRANSFORMER_TYPE](img_size=cfg.INPUT.SIZE_TRAIN, sie_xishu=cfg.MODEL.SIE_COE, local_feature=cfg.MODEL.JPM, camera=camera_num, view=view_num, stride_size=cfg.MODEL.STRIDE_SIZE, drop_path_rate=cfg.MODEL.DROP_PATH)
+        self.base = factory[cfg.MODEL.TRANSFORMER_TYPE](img_size=cfg.INPUT.SIZE_TRAIN, sie_xishu=cfg.MODEL.SIE_COE, local_feature=cfg.MODEL.JPM, camera=camera_num, view=view_num, stride_size=cfg.MODEL.STRIDE_SIZE, drop_path_rate=cfg.MODEL.DROP_PATH).to(self.gpu0)
 
         if pretrain_choice == 'imagenet':
             self.base.load_param(model_path)
@@ -485,15 +488,15 @@ class build_FourDNet(nn.Module):
         self.reduced_dim = 128
 
 
-        # reduce dimensionality of ViT features
-        self.project_local_rgb = nn.Linear(self.in_planes, self.reduced_dim)
-        self.project_global_rgb = nn.Linear(self.in_planes, self.reduced_dim)
+        # project the RGB features to smaller dimension
+        self.project_local_rgb = nn.Linear(self.in_planes, self.reduced_dim).to(self.gpu0)
+        self.project_global_rgb = nn.Linear(self.in_planes, self.reduced_dim).to(self.gpu0)
 
         
         # defining the D backbone 
-        self.vgg = VGGFeatures()
-        self.merge_local_global_depth = nn.Linear(128 + 128, self.reduced_dim)
-        self.project_global_depth = nn.Conv2d(512, 128, 3, 1, 1)
+        self.vgg = VGGFeatures().to(self.gpu1)
+        self.merge_local_global_depth = nn.Linear(128 + 128, self.reduced_dim).to(self.gpu1)
+        self.project_global_depth = nn.Conv2d(512, 128, 3, 1, 1).to(self.gpu1)
 
 
         # the depth-classifier at the end of depth branch
@@ -501,22 +504,23 @@ class build_FourDNet(nn.Module):
         # self.classifier = nn.Linear(self.reduced_dim, num_classes)
 
 
+        self.r2d_gpu = self.gpu0
         # R2D cross attention
         self.r2d_k = 3
         self.r2d_m = 8
-        self.r2d_Q = nn.Linear(2 * self.reduced_dim, self.reduced_dim)
-        self.r2d_V = nn.Linear(self.reduced_dim, self.reduced_dim)
+        self.r2d_Q = nn.Linear(2 * self.reduced_dim, self.reduced_dim).to(self.r2d_gpu)
+        self.r2d_V = nn.Linear(self.reduced_dim, self.reduced_dim).to(self.r2d_gpu)
         self.r2d_selector = nn.Sequential(
             nn.Linear(self.reduced_dim, 2 * self.r2d_m * self.r2d_k),
             nn.Sigmoid(),
-        ) 
+        ).to(self.r2d_gpu) 
         self.r2d_attn_weights = nn.Sequential(
             nn.Linear(self.reduced_dim, self.r2d_m * self.r2d_k),
             nn.Softmax(dim=-1)
-        )
+        ).to(self.r2d_gpu)
 
 
-        self.classifier = nn.Linear(self.reduced_dim, num_classes)
+        self.classifier = nn.Linear(self.reduced_dim, num_classes).to(self.target_gpu)
 
         # development stage
         self.visualize = True
@@ -552,8 +556,8 @@ class build_FourDNet(nn.Module):
 
 
         # converting the inputs to float
-        depth = depth.float()
-        rgb = rgb.float()
+        depth = depth.float().to(self.gpu1)
+        rgb = rgb.float().to(self.gpu0)
 
 
         # extracting the RGB features
@@ -594,8 +598,8 @@ class build_FourDNet(nn.Module):
 
         """R2D Cross Attention"""
         # print(f"starting with R2D Cross Attention")
-        q = self.r2d_Q(local_cat_global_rgb)
-        v = self.r2d_V(local_cat_global_depth)
+        q = self.r2d_Q(local_cat_global_rgb.to(self.r2d_gpu))
+        v = self.r2d_V(local_cat_global_depth.to(self.r2d_gpu))
         # print(f"q.shape = {q.shape}")
         # print(f"v.shape = {v.shape}")
 
@@ -638,10 +642,10 @@ class build_FourDNet(nn.Module):
         
 
         # vectorized implementation
-        nearest_pos = nearest_pos.to(self.gpu2).type(torch.int64)
-        locations_x = locations_x.to(self.gpu2)
-        locations_y = locations_y.to(self.gpu2)
-        nearest_feat = nearest_feat.to(self.gpu2)
+        nearest_pos = nearest_pos.to(self.r2d_gpu).type(torch.int64)
+        locations_x = locations_x.to(self.r2d_gpu)
+        locations_y = locations_y.to(self.r2d_gpu)
+        nearest_feat = nearest_feat.to(self.r2d_gpu)
         pos0 = nearest_pos[:, :, :, 0] * Wd + nearest_pos[:, :, :, 3]
         pos1 = nearest_pos[:, :, :, 1] * Wd + nearest_pos[:, :, :, 3]
         pos2 = nearest_pos[:, :, :, 1] * Wd + nearest_pos[:, :, :, 2]
@@ -699,6 +703,7 @@ class build_FourDNet(nn.Module):
         # final_embedding = final_depth_feat 
         final_embedding = r2d_feat 
         # final_embedding = global_feat 
+        final_embedding = final_embedding.to(self.target_gpu)
 
 
         # compute the cls scores and return
@@ -889,7 +894,8 @@ __factory_T_type = {
     'deit_small_patch16_224_TransReID': deit_small_patch16_224_TransReID
 }
 
-def make_model(cfg, num_class, camera_num, view_num):
+
+def make_model(cfg, num_class, camera_num, view_num, gpu0, gpu1, target_gpu):
     # if cfg.MODEL.NAME == 'transformer':
     #     if cfg.MODEL.JPM:
     #         model = build_transformer_local(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
@@ -901,7 +907,7 @@ def make_model(cfg, num_class, camera_num, view_num):
     #     model = Backbone(num_class, cfg)
     #     print('===========building ResNet===========')
 
-    model = build_FourDNet(num_class, camera_num, view_num, cfg, __factory_T_type, 0, 0, rearrange=cfg.MODEL.RE_ARRANGE)
+    model = build_FourDNet(num_class, camera_num, view_num, cfg, __factory_T_type, gpu0, gpu1, target_gpu, rearrange=cfg.MODEL.RE_ARRANGE)
     # model = build_SimpleDepthNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     # model = build_DepthNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     # model = build_DepthNet2(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)

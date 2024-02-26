@@ -14,6 +14,9 @@ import os
 import argparse
 # from timm.scheduler import create_scheduler
 from config import cfg
+GPU0 = 0
+GPU1 = 1
+TARGET_GPU = 1
 
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -64,10 +67,10 @@ if __name__ == '__main__':
     if cfg.MODEL.DIST_TRAIN:
         torch.distributed.init_process_group(backend='nccl', init_method='env://')
 
-    os.environ['CUDA_VISIBLE_DEVICES'] = cfg.MODEL.DEVICE_ID
+    # os.environ['CUDA_VISIBLE_DEVICES'] = cfg.MODEL.DEVICE_ID
     train_loader, val_loader, num_query, num_classes, camera_num, view_num = make_dataloader_depth(cfg)
 
-    model = make_model(cfg, num_class=num_classes, camera_num=camera_num, view_num = view_num)
+    model = make_model(cfg, num_class=num_classes, camera_num=camera_num, view_num = view_num, gpu0 = GPU0, gpu1 = GPU1, target_gpu = TARGET_GPU)
 
     loss_func, center_criterion = make_loss(cfg, num_classes=num_classes)
 
@@ -85,5 +88,6 @@ if __name__ == '__main__':
         optimizer_center,
         scheduler,
         loss_func,
-        num_query, args.local_rank
+        num_query,
+        TARGET_GPU, 
     )
