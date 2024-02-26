@@ -15,7 +15,7 @@ import shutil
 WANDB = True
 EMBEDDING_DIM = 128
 NUM_INSTANCES = 12
-EXPERIMENT_NAME = "DepthNet3" 
+EXPERIMENT_NAME = "DepthNet3_bs64" 
 
 def do_train_4DNet(cfg,
              model,

@@ -288,7 +288,6 @@ class build_DepthNet3(nn.Module):
         self.classifier = nn.Linear(self.reduced_dim, num_classes)
         self.vis_count = 0
         self.max_vis = 100
-        self.classifier = nn.Linear(self.reduced_dim, num_classes)
 
 
     def forward(self, _, depth, label=None, cam_label= None, view_label=None):  # label is unused if self.cos_layer == 'no'
@@ -327,7 +326,7 @@ class build_DepthNet(nn.Module):
 
 class build_DepthNet2(nn.Module):
     def __init__(self, num_classes, camera_num, view_num, cfg, factory, rearrange):
-        print(f"<===================== building DepthNet =========================>")
+        print(f"<===================== building DepthNet2 =========================>")
         super().__init__()
         self.reduced_dim = 128
         self.vgg = VGGFeatures()
