@@ -448,7 +448,7 @@ class build_SimpleDepthNet(nn.Module):
 
 
 class build_FourDNet(nn.Module):
-    def __init__(self, num_classes, camera_num, view_num, cfg, factory, rearrange):
+    def __init__(self, num_classes, camera_num, view_num, cfg, factory, gpu1, gpu2, rearrange):
         print(f"<===================== building FourDNet =========================>")
         super(build_FourDNet, self).__init__()
         model_path = cfg.MODEL.PRETRAIN_PATH
@@ -456,9 +456,12 @@ class build_FourDNet(nn.Module):
         self.neck = cfg.MODEL.NECK
         self.neck_feat = cfg.TEST.NECK_FEAT
         self.in_planes = 768
+        self.gpu1 = gpu1
+        self.gpu2 = gpu2
 
         print('using Transformer_type: {} as a backbone'.format(cfg.MODEL.TRANSFORMER_TYPE))
 
+        # configuring the SIE info
         if cfg.MODEL.SIE_CAMERA:
             camera_num = camera_num
         else:
@@ -483,14 +486,15 @@ class build_FourDNet(nn.Module):
 
 
         # reduce dimensionality of ViT features
-        self.reduce_dims = nn.Linear(self.in_planes, self.reduced_dim)
-        self.reduce_dims_global = nn.Linear(self.in_planes, self.reduced_dim)
+        self.project_local_rgb = nn.Linear(self.in_planes, self.reduced_dim)
+        self.project_global_rgb = nn.Linear(self.in_planes, self.reduced_dim)
 
         
         # defining the D backbone 
         self.vgg = VGGFeatures()
-        # 128 are the local features, 512 are the global features
-        self.merge_local_global_depth = nn.Linear(128 + 512, self.reduced_dim)
+        self.merge_local_global_depth = nn.Linear(128 + 128, self.reduced_dim)
+        self.project_global_depth = nn.Conv2d(512, 128, 3, 1, 1)
+
 
         # the depth-classifier at the end of depth branch
         # self.ffn = nn.Conv2d(512, self.reduced_dim, 7, 1, 0)
@@ -511,13 +515,14 @@ class build_FourDNet(nn.Module):
             nn.Softmax(dim=-1)
         )
 
-        self.device = "cuda:0"
+
         self.classifier = nn.Linear(self.reduced_dim, num_classes)
 
         # development stage
         self.visualize = True
         self.vis_count = 0
         self.max_vis = 10
+
 
     def forward(self, rgb, depth, label=None, cam_label= None, view_label=None):  # label is unused if self.cos_layer == 'no'
         B = rgb.shape[0]
@@ -526,6 +531,9 @@ class build_FourDNet(nn.Module):
         # print()
         # print()
         # depth = depth.half()
+
+
+        # visualizing the inputs
         # print(f"len(np.unique(depth)) = {len(torch.unique(depth))}")
         # if self.visualize and self.vis_count < self.max_vis:
         #     for batch_idx in range(B):
@@ -541,6 +549,9 @@ class build_FourDNet(nn.Module):
         #         plt.close()
         #         self.vis_count += 1
 
+
+
+        # converting the inputs to float
         depth = depth.float()
         rgb = rgb.float()
 
@@ -548,67 +559,58 @@ class build_FourDNet(nn.Module):
         # extracting the RGB features
         features = self.base(rgb, cam_label=cam_label, view_label=view_label)
         N = features.shape[1] - 1
-        # print(f"features.shape = {features.shape}")
+
 
         # global rgb features
-        global_feat = features[:, 0]
-        global_feat = self.reduce_dims_global(global_feat)
-        # print(f"global_feat.shape = {global_feat.shape}")
+        global_rgb = features[:, 0]
+        global_rgb = self.project_global_rgb(global_rgb)
+
 
         # local rgb features
-        local_feat = features[:, 1:]
-        local_feat = self.reduce_dims(local_feat)
-        # print(f"local_feat.shape = {local_feat.shape}")
+        local_rgb = features[:, 1:]
+        local_rgb = self.project_local_rgb(local_rgb)
+
 
         # concatenating local and global rgb features 
-        local_cat_global = torch.cat((global_feat.unsqueeze(1).repeat(1, N, 1), local_feat), -1)
-        # print(f"local_cat_global.shape = {local_cat_global.shape}")
+        local_cat_global_rgb = torch.cat((global_rgb.unsqueeze(1).repeat(1, N, 1), local_rgb), -1)
+        # these will be projected from 2 * self.reduced_dim to self.reduced_dim in the query transformation
+
 
         # depth features
         features4, features20 = self.vgg(depth)
         # features4 = torch.rand(B, 128, 112, 112).to(0)
         # features20 = torch.rand(B, 512, 7, 7).to(0)
         Hd, Wd = features4.shape[-2], features4.shape[-1]
-        local_depth_feat = features4.permute(0, 2, 3, 1).reshape(B, Hd * Wd, self.reduced_dim)
-        # print(f"Hd = {Hd}")
-        # print(f"Wd = {Wd}")
-        # print(f"local_depth_feat.shape = {local_depth_feat.shape}")
-
-        # global average pooling on the global depth features
-        global_depth_feat = torch.mean(features20.reshape(B, 512, 49), dim=-1)
-        # print(f"global_depth_feat.shape = {global_depth_feat.shape}")
-
-        # concatenating local and global depth features 
-        # print(f"Hd = {Hd}")
-        # print(f"Wd = {Wd}")
-        # print(f"global_depth_feat.shape = {global_depth_feat.shape}")
+        features20 = F.interpolate(features20, (112, 112))
+        global_depth = self.project_global_depth(features20)
         local_cat_global_depth = torch.cat((
-            global_depth_feat.unsqueeze(1).repeat(1, Hd * Wd, 1),
-            local_depth_feat
-        ), -1)
+            global_depth,
+            features4
+        ), 1).permute(0, 2, 3, 1).reshape(B, 112 * 112, 128 + 128)
         local_cat_global_depth = self.merge_local_global_depth(local_cat_global_depth)
-        assert local_cat_global_depth.shape == (B, Hd * Wd, self.reduced_dim)
-        # local_cat_global_depth = local_depth_feat
+        # print(f"Hd = {Hd}")
+        # print(f"Wd = {Wd}")
 
 
         """R2D Cross Attention"""
         # print(f"starting with R2D Cross Attention")
-        q = self.r2d_Q(local_cat_global)
+        q = self.r2d_Q(local_cat_global_rgb)
         v = self.r2d_V(local_cat_global_depth)
-
         # print(f"q.shape = {q.shape}")
         # print(f"v.shape = {v.shape}")
 
+
+        # selecting key positions and their attention weights
         selector_outputs = self.r2d_selector(q)
         attention_scores = self.r2d_attn_weights(q)
         locations_x = selector_outputs[:, :, 0 : self.r2d_m * self.r2d_k]
         locations_y = selector_outputs[:, :, self.r2d_m * self.r2d_k :] 
-
         # print(f"locations_x.shape = {locations_x.shape}")
         # print(f"locations_y.shape = {locations_y.shape}")
         # print(f"attention_scores.shape = {attention_scores.shape}")
 
-        # find out nearest positions for each selected position
+
+        # find out nearest feature positions for each selected position
         # x1, x2, y1, y2
         nearest_pos = torch.zeros((B, N, self.r2d_m * self.r2d_k, 4))
         stride_x = 1.0 / (Wd - 1)
@@ -618,11 +620,15 @@ class build_FourDNet(nn.Module):
         nearest_pos[..., 2] = locations_y // stride_y
         nearest_pos[..., 3] = torch.minimum(nearest_pos[..., 2] + 1, torch.tensor(Hd - 1))
         nearest_pos = nearest_pos.type(torch.int32)
-        nearest_feat = torch.zeros((B, N, self.r2d_m * self.r2d_k, 4, v.shape[-1]))
-
         # print(f"nearest_pos.shape = {nearest_pos.shape}")
+
+
+        # find out the nearest features for the selected positions
+        nearest_feat = torch.zeros((B, N, self.r2d_m * self.r2d_k, 4, v.shape[-1]))
         # print(f"nearest_feat.shape = {nearest_feat.shape}")
 
+
+        # non vectorized implementation
         # nearest_feat2 = torch.zeros((B, N, self.r2d_m * self.r2d_k, 4, v.shape[-1]))
         # for batch_idx in range(B):
         #     nearest_feat2[batch_idx, :, :, 0] = v[batch_idx, nearest_pos[batch_idx, :, :, 0] * Wd + nearest_pos[batch_idx, :, :, 3]]
@@ -631,10 +637,11 @@ class build_FourDNet(nn.Module):
         #     nearest_feat2[batch_idx, :, :, 3] = v[batch_idx, nearest_pos[batch_idx, :, :, 0] * Wd + nearest_pos[batch_idx, :, :, 2]]
         
 
-        nearest_pos = nearest_pos.to(self.device).type(torch.int64)
-        locations_x = locations_x.to(self.device)
-        locations_y = locations_y.to(self.device)
-        nearest_feat = nearest_feat.to(self.device)
+        # vectorized implementation
+        nearest_pos = nearest_pos.to(self.gpu2).type(torch.int64)
+        locations_x = locations_x.to(self.gpu2)
+        locations_y = locations_y.to(self.gpu2)
+        nearest_feat = nearest_feat.to(self.gpu2)
         pos0 = nearest_pos[:, :, :, 0] * Wd + nearest_pos[:, :, :, 3]
         pos1 = nearest_pos[:, :, :, 1] * Wd + nearest_pos[:, :, :, 3]
         pos2 = nearest_pos[:, :, :, 1] * Wd + nearest_pos[:, :, :, 2]
@@ -643,51 +650,58 @@ class build_FourDNet(nn.Module):
         nearest_feat[:, :, :, 1] = torch.gather(v.unsqueeze(1).expand(B, N, v.shape[-2], v.shape[-1]), 2, pos1.unsqueeze(-1).expand(*pos1.shape, self.reduced_dim))
         nearest_feat[:, :, :, 2] = torch.gather(v.unsqueeze(1).expand(B, N, v.shape[-2], v.shape[-1]), 2, pos2.unsqueeze(-1).expand(*pos2.shape, self.reduced_dim))
         nearest_feat[:, :, :, 3] = torch.gather(v.unsqueeze(1).expand(B, N, v.shape[-2], v.shape[-1]), 2, pos3.unsqueeze(-1).expand(*pos3.shape, self.reduced_dim))
-
-
-        locs_x = locations_x.detach().cpu().numpy()
-        locs_y = locations_y.detach().cpu().numpy()
-        if self.visualize and self.vis_count < self.max_vis:
-            for batch_idx in range(B):
-                for query_idx in range(N):
-                    canvas = np.zeros((Hd * 10, Wd * 10, 3)).astype(np.uint8) 
-                    canvas.fill(255)
-                    for idx in range(self.r2d_m * self.r2d_k):
-                        x = int(nearest_pos[batch_idx, query_idx, idx, 0])
-                        y = int(nearest_pos[batch_idx, query_idx, idx, 2])
-                        cv2.circle(canvas, (x * 10, y * 10), 2, (255, 0, 0), 2)
-                        text = f"({locs_x[batch_idx, query_idx, idx]}, {locs_y[batch_idx, query_idx, idx]})"
-                        position = (x * 10, y * 10)  # Coordinates of the text (top-left corner)
-                        font = cv2.FONT_HERSHEY_SIMPLEX
-                        scale = 0.33  # Font scale factor
-                        color = (255, 0, 0)  # BGR color (blue in this case)
-                        thickness = 2  # Thickness of the text
-                        # Put the text on the image
-                        cv2.putText(canvas, text, position, font, scale, color, thickness)
-                    cv2.imwrite(f"vis_positions/{self.vis_count}.jpg", canvas)
-                    self.vis_count += 1 
-
-
-
         # print(f"nearest_feat.shape = {nearest_feat.shape}")
-
         # assert torch.allclose(nearest_feat, nearest_feat2.to(self.device))
         # print(f"assertion valid!")
 
+
+        # visualizing the nearest_pos
+        # locs_x = locations_x.detach().cpu().numpy()
+        # locs_y = locations_y.detach().cpu().numpy()
+        # if self.visualize and self.vis_count < self.max_vis:
+        #     for batch_idx in range(B):
+        #         for query_idx in range(N):
+        #             canvas = np.zeros((Hd * 10, Wd * 10, 3)).astype(np.uint8) 
+        #             canvas.fill(255)
+        #             for idx in range(self.r2d_m * self.r2d_k):
+        #                 x = int(nearest_pos[batch_idx, query_idx, idx, 0])
+        #                 y = int(nearest_pos[batch_idx, query_idx, idx, 2])
+        #                 cv2.circle(canvas, (x * 10, y * 10), 2, (255, 0, 0), 2)
+        #                 text = f"({locs_x[batch_idx, query_idx, idx]}, {locs_y[batch_idx, query_idx, idx]})"
+        #                 position = (x * 10, y * 10)  # Coordinates of the text (top-left corner)
+        #                 font = cv2.FONT_HERSHEY_SIMPLEX
+        #                 scale = 0.33  # Font scale factor
+        #                 color = (255, 0, 0)  # BGR color (blue in this case)
+        #                 thickness = 2  # Thickness of the text
+        #                 # Put the text on the image
+        #                 cv2.putText(canvas, text, position, font, scale, color, thickness)
+        #             cv2.imwrite(f"vis_positions/{self.vis_count}.jpg", canvas)
+        #             self.vis_count += 1 
+
+
+        # bilinear interpolation
         interpolated_feat = bilinear_interpolation(nearest_feat, nearest_pos[..., 0], nearest_pos[..., 1], nearest_pos[..., 2], nearest_pos[..., 3], locations_x * (Wd - 1), locations_y * (Hd - 1)).squeeze(-1).squeeze(-1)
         # print(f"interpolated_feat.shape = {interpolated_feat.shape}")
 
-        # print(f"interpolated_feat.shape = {interpolated_feat.shape}")
+
+        # performing weighted sum of values
         # print(f"attention_scores.shape = {attention_scores.shape}")
         r2d_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
+
+
+        # performing global average pooling
         r2d_feat = torch.mean(r2d_feat, -2)
         # print(f"r2d_feat.shape = {r2d_feat.shape}")
 
+
+        # for debugging, choose which embedding to use as final embedding
         # final_depth_feat = torch.mean(local_cat_global_depth, dim=-2)
         # final_embedding = final_depth_feat 
         final_embedding = r2d_feat 
-
         # final_embedding = global_feat 
+
+
+        # compute the cls scores and return
         cls_score = self.classifier(final_embedding)
         if self.training:
             return cls_score, final_embedding
@@ -887,10 +901,10 @@ def make_model(cfg, num_class, camera_num, view_num):
     #     model = Backbone(num_class, cfg)
     #     print('===========building ResNet===========')
 
-    # model = build_FourDNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
+    model = build_FourDNet(num_class, camera_num, view_num, cfg, __factory_T_type, 0, 0, rearrange=cfg.MODEL.RE_ARRANGE)
     # model = build_SimpleDepthNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     # model = build_DepthNet(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     # model = build_DepthNet2(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
-    model = build_DepthNet3(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
+    # model = build_DepthNet3(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     # model = build_transformer_local(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     return model
