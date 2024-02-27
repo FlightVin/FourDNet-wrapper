@@ -15,7 +15,7 @@ import shutil
 WANDB = False
 EMBEDDING_DIM = 128
 NUM_INSTANCES = 12
-EXPERIMENT_NAME = "FourDNet" 
+EXPERIMENT_NAME = "FourDNet_gridsample" 
 
 def do_train_4DNet(cfg,
              model,

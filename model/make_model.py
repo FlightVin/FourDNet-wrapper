@@ -12,6 +12,14 @@ import shutil
 import numpy as np 
 import cv2
 
+
+def bilinear_interpolationv2(features, ids): 
+    B = features.shape[0]
+    N = features.shape[1]
+    return torch.gather(features.unsqueeze(1).expand(B, N, features.shape[-2], features.shape[-1]), 2, ids.unsqueeze(-1).expand(*ids.shape, features.shape[-1]))
+
+
+
 def bilinear_interpolation(f, x1, x2, y1, y2, x, y):
     x1 = x1.type(torch.float32) 
     x2 = x2.type(torch.float32) 
@@ -609,82 +617,28 @@ class build_FourDNet(nn.Module):
         attention_scores = self.r2d_attn_weights(q)
         locations_x = selector_outputs[:, :, 0 : self.r2d_m * self.r2d_k]
         locations_y = selector_outputs[:, :, self.r2d_m * self.r2d_k :] 
-        # print(f"locations_x.shape = {locations_x.shape}")
-        # print(f"locations_y.shape = {locations_y.shape}")
-        # print(f"attention_scores.shape = {attention_scores.shape}")
 
 
-        # find out nearest feature positions for each selected position
-        # x1, x2, y1, y2
-        nearest_pos = torch.zeros((B, N, self.r2d_m * self.r2d_k, 4))
-        stride_x = 1.0 / (Wd - 1)
-        stride_y = 1.0 / (Hd - 1)
-        nearest_pos[..., 0] = locations_x // stride_x
-        nearest_pos[..., 1] = torch.minimum(nearest_pos[..., 0] + 1, torch.tensor(Wd - 1))
-        nearest_pos[..., 2] = locations_y // stride_y
-        nearest_pos[..., 3] = torch.minimum(nearest_pos[..., 2] + 1, torch.tensor(Hd - 1))
-        nearest_pos = nearest_pos.type(torch.int32)
-        # print(f"nearest_pos.shape = {nearest_pos.shape}")
+        # performing sampling of the value feature map at the given locations
+        v = v.permute(0, 2, 1).reshape(B, self.reduced_dim, Hd, Wd)
+        # print(f"input.shape = {v.shape}")
+        grid = torch.stack((locations_x, locations_y), -1)
+        grid = grid * 2 - 1
+        # print(f"grid.shape = {grid.shape}")
+        interpolated_feat = F.grid_sample(v, grid, align_corners=True).permute(0, 2, 3, 1)
+        # print(f"interpolated_feat.shape = {interpolated_feat.shape}")
+        # assert interpolated_feat.shape == (B, N, self.r2d_m * self.r2d_k, self.reduced_dim)
 
 
-        # find out the nearest features for the selected positions
-        nearest_feat = torch.zeros((B, N, self.r2d_m * self.r2d_k, 4, v.shape[-1]))
-        # print(f"nearest_feat.shape = {nearest_feat.shape}")
-
-
-        # non vectorized implementation
-        # nearest_feat2 = torch.zeros((B, N, self.r2d_m * self.r2d_k, 4, v.shape[-1]))
-        # for batch_idx in range(B):
-        #     nearest_feat2[batch_idx, :, :, 0] = v[batch_idx, nearest_pos[batch_idx, :, :, 0] * Wd + nearest_pos[batch_idx, :, :, 3]]
-        #     nearest_feat2[batch_idx, :, :, 1] = v[batch_idx, nearest_pos[batch_idx, :, :, 1] * Wd + nearest_pos[batch_idx, :, :, 3]]
-        #     nearest_feat2[batch_idx, :, :, 2] = v[batch_idx, nearest_pos[batch_idx, :, :, 1] * Wd + nearest_pos[batch_idx, :, :, 2]]
-        #     nearest_feat2[batch_idx, :, :, 3] = v[batch_idx, nearest_pos[batch_idx, :, :, 0] * Wd + nearest_pos[batch_idx, :, :, 2]]
-        
-
-        # vectorized implementation
-        nearest_pos = nearest_pos.to(self.r2d_gpu).type(torch.int64)
-        locations_x = locations_x.to(self.r2d_gpu)
-        locations_y = locations_y.to(self.r2d_gpu)
-        nearest_feat = nearest_feat.to(self.r2d_gpu)
-        pos0 = nearest_pos[:, :, :, 0] * Wd + nearest_pos[:, :, :, 3]
-        pos1 = nearest_pos[:, :, :, 1] * Wd + nearest_pos[:, :, :, 3]
-        pos2 = nearest_pos[:, :, :, 1] * Wd + nearest_pos[:, :, :, 2]
-        pos3 = nearest_pos[:, :, :, 0] * Wd + nearest_pos[:, :, :, 2]
-        nearest_feat[:, :, :, 0] = torch.gather(v.unsqueeze(1).expand(B, N, v.shape[-2], v.shape[-1]), 2, pos0.unsqueeze(-1).expand(*pos0.shape, self.reduced_dim))
-        nearest_feat[:, :, :, 1] = torch.gather(v.unsqueeze(1).expand(B, N, v.shape[-2], v.shape[-1]), 2, pos1.unsqueeze(-1).expand(*pos1.shape, self.reduced_dim))
-        nearest_feat[:, :, :, 2] = torch.gather(v.unsqueeze(1).expand(B, N, v.shape[-2], v.shape[-1]), 2, pos2.unsqueeze(-1).expand(*pos2.shape, self.reduced_dim))
-        nearest_feat[:, :, :, 3] = torch.gather(v.unsqueeze(1).expand(B, N, v.shape[-2], v.shape[-1]), 2, pos3.unsqueeze(-1).expand(*pos3.shape, self.reduced_dim))
-        # print(f"nearest_feat.shape = {nearest_feat.shape}")
-        # assert torch.allclose(nearest_feat, nearest_feat2.to(self.device))
-        # print(f"assertion valid!")
-
-
-        # visualizing the nearest_pos
-        # locs_x = locations_x.detach().cpu().numpy()
-        # locs_y = locations_y.detach().cpu().numpy()
-        # if self.visualize and self.vis_count < self.max_vis:
-        #     for batch_idx in range(B):
-        #         for query_idx in range(N):
-        #             canvas = np.zeros((Hd * 10, Wd * 10, 3)).astype(np.uint8) 
-        #             canvas.fill(255)
-        #             for idx in range(self.r2d_m * self.r2d_k):
-        #                 x = int(nearest_pos[batch_idx, query_idx, idx, 0])
-        #                 y = int(nearest_pos[batch_idx, query_idx, idx, 2])
-        #                 cv2.circle(canvas, (x * 10, y * 10), 2, (255, 0, 0), 2)
-        #                 text = f"({locs_x[batch_idx, query_idx, idx]}, {locs_y[batch_idx, query_idx, idx]})"
-        #                 position = (x * 10, y * 10)  # Coordinates of the text (top-left corner)
-        #                 font = cv2.FONT_HERSHEY_SIMPLEX
-        #                 scale = 0.33  # Font scale factor
-        #                 color = (255, 0, 0)  # BGR color (blue in this case)
-        #                 thickness = 2  # Thickness of the text
-        #                 # Put the text on the image
-        #                 cv2.putText(canvas, text, position, font, scale, color, thickness)
-        #             cv2.imwrite(f"vis_positions/{self.vis_count}.jpg", canvas)
-        #             self.vis_count += 1 
-
-
-        # bilinear interpolation
-        interpolated_feat = bilinear_interpolation(nearest_feat, nearest_pos[..., 0], nearest_pos[..., 1], nearest_pos[..., 2], nearest_pos[..., 3], locations_x * (Wd - 1), locations_y * (Hd - 1)).squeeze(-1).squeeze(-1)
+        # attempting to use the nearest feature by converting the position to integer, running into some issues here!
+        # assert torch.all(locations_x <= 1.0)
+        # assert torch.all(locations_y <= 1.0)
+        # ids = ((locations_y * (Hd - 1)) + 1).int() * Wd + (locations_x * Wd).int() - 1
+        # ids = ids.type(torch.int64)
+        # assert torch.all(ids < Hd * Wd)
+        # assert torch.all(ids >= 0)
+        # interpolated_feat = torch.gather(v.unsqueeze(1).expand(B, N, v.shape[-2], v.shape[-1]), 2, ids.unsqueeze(-1).expand(*ids.shape, v.shape[-1]))
+        # assert not torch.any(interpolated_feat.isnan())
         # print(f"interpolated_feat.shape = {interpolated_feat.shape}")
 
 
