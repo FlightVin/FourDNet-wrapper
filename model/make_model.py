@@ -588,7 +588,6 @@ class build_FourDNet(nn.Module):
         #         self.vis_count += 1
 
 
-
         # converting the inputs to float
         depth = depth.float().to(self.gpu1)
         rgb = rgb.float().to(self.gpu0)

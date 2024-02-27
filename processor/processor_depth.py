@@ -12,10 +12,10 @@ import wandb
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import shutil
-WANDB = False
+WANDB = True
 EMBEDDING_DIM = 128
 NUM_INSTANCES = 12
-EXPERIMENT_NAME = "FourDNet_gridsample" 
+EXPERIMENT_NAME = "FourDNet_R2R" 
 
 def do_train_4DNet(cfg,
              model,
@@ -195,7 +195,7 @@ def do_train_4DNet(cfg,
                     positive_score = positive_score / (count * count)
                     negative_score = negative_score / (count * count)
                     plt.figure(figsize=(20, 20))
-                    plt.imshow(scores)
+                    plt.imshow(scores, vmin=0.0, vmax=1.0)
                     plt.savefig(f"logs/{EXPERIMENT_NAME}/heatmap_{epoch}.jpg")
 
 
