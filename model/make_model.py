@@ -11,7 +11,8 @@ import os
 import shutil
 import numpy as np 
 import cv2
-
+import shutil 
+import os.path as osp
 
 
 def shuffle_unit(features, shift, group, begin=1):
@@ -557,10 +558,25 @@ class build_FourDNet(nn.Module):
         self.visualize = True
         self.vis_count = 0
         self.max_vis = 10
+        if self.visualize and osp.exists(f"vis"):
+            shutil.rmtree(f"vis")
 
 
     def forward(self, rgb, depth, label=None, cam_label= None, view_label=None):  # label is unused if self.cos_layer == 'no'
-        B = rgb.shape[0]
+
+        rgb = rgb.float().to(self.gpu0)
+        depth = depth.float().to(self.gpu1)
+
+
+        with torch.no_grad():
+            # random modality dropout
+            B = rgb.shape[0]
+            p = torch.randint(0, 5, size=(B, ))
+            rgb_dropout_ids = (p == 0).to(self.gpu0)
+            depth_dropout_ids = (p == 1).to(self.gpu1)
+            rgb[rgb_dropout_ids] = torch.zeros(rgb[0].shape).to(self.gpu0)
+            depth[depth_dropout_ids] = torch.zeros(depth[0].shape).to(self.gpu1)
+
 
         # visualizing the inputs
         if self.visualize and self.vis_count < self.max_vis:
@@ -577,10 +593,6 @@ class build_FourDNet(nn.Module):
                 plt.close()
                 self.vis_count += 1
 
-
-        # converting the inputs to float
-        depth = depth.float().to(self.gpu1)
-        rgb = rgb.float().to(self.gpu0)
 
 
         # extracting the RGB features
@@ -678,28 +690,28 @@ class build_FourDNet(nn.Module):
         local_cat_global_depth = self.d2d_norm(local_cat_global_depth)
 
 
-        # """D2R Cross Attention"""
-        # # selecting key positions and their attention weights
-        # selector_outputs = self.d2r_selector(q_d.to(self.d2r_gpu))
-        # attention_scores = self.d2r_attn_weights(q_d.to(self.d2r_gpu))
-        # locations_x = selector_outputs[:, :, 0 : self.d2r_m * self.d2r_k]
-        # locations_y = selector_outputs[:, :, self.d2r_m * self.d2r_k :] 
+        """D2R Cross Attention"""
+        # selecting key positions and their attention weights
+        selector_outputs = self.d2r_selector(q_d.to(self.d2r_gpu))
+        attention_scores = self.d2r_attn_weights(q_d.to(self.d2r_gpu))
+        locations_x = selector_outputs[:, :, 0 : self.d2r_m * self.d2r_k]
+        locations_y = selector_outputs[:, :, self.d2r_m * self.d2r_k :] 
 
 
-        # # performing sampling of the value feature map at the given locations
-        # v = v_r.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
-        # grid = torch.stack((locations_x, locations_y), -1)
-        # grid = grid * 2 - 1
-        # interpolated_feat = F.grid_sample(v.to(self.d2r_gpu), grid, align_corners=True).permute(0, 2, 3, 1)
+        # performing sampling of the value feature map at the given locations
+        v = v_r.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
+        grid = torch.stack((locations_x, locations_y), -1)
+        grid = grid * 2 - 1
+        interpolated_feat = F.grid_sample(v.to(self.d2r_gpu), grid, align_corners=True).permute(0, 2, 3, 1)
 
 
-        # # performing weighted sum of values
-        # d2r_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
+        # performing weighted sum of values
+        d2r_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
 
 
-        # # adding back to the depth path
-        # local_cat_global_depth = local_cat_global_depth + d2r_feat
-        # local_cat_global_depth = self.d2r_norm(local_cat_global_depth)
+        # adding back to the depth path
+        local_cat_global_depth = local_cat_global_depth + d2r_feat
+        local_cat_global_depth = self.d2r_norm(local_cat_global_depth)
 
 
         """R2D Cross Attention"""
@@ -726,16 +738,14 @@ class build_FourDNet(nn.Module):
         local_cat_global_rgb = self.r2d_norm(local_cat_global_rgb)
 
 
-
         """Preparing final features to use for classification"""
         # performing global average pooling
         local_cat_global_rgb = torch.mean(local_cat_global_rgb, -2)
         local_cat_global_depth = torch.mean(local_cat_global_depth, -2)
 
 
-        final_embedding = local_cat_global_depth
+        final_embedding = local_cat_global_depth.to(self.target_gpu) + local_cat_global_rgb.to(self.target_gpu)
         # final_embedding = local_cat_global_rgb 
-        final_embedding = final_embedding.to(self.target_gpu)
 
 
         # compute the cls scores and return
