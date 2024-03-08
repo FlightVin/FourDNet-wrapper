@@ -672,67 +672,40 @@ class build_FourDNet(nn.Module):
         local_cat_global_depth = self.d2d_norm(local_cat_global_depth)
 
 
-        # """R2D Cross Attention"""
-        # v_d = self.V_d(local_cat_global_depth.to(self.r2d_gpu))
-        # # print(f"q.shape = {q.shape}")
-        # # print(f"v.shape = {v.shape}")
+        """R2D Cross Attention"""
+        # selecting key positions and their attention weights
+        selector_outputs = self.r2d_selector(q_r.to(self.r2d_gpu))
+        attention_scores = self.r2d_attn_weights(q_r.to(self.r2d_gpu))
+        locations_x = selector_outputs[:, :, 0 : self.r2d_m * self.r2d_k]
+        locations_y = selector_outputs[:, :, self.r2d_m * self.r2d_k :] 
 
 
-        # # transferring queries and values to r2d gpu
-        # q_r = q_r.to(self.r2d_gpu)
-        # v_d = v_d.to(self.r2d_gpu)
+        # performing sampling of the value feature map at the given locations
+        v = v_d.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
+        grid = torch.stack((locations_x, locations_y), -1)
+        grid = grid * 2 - 1
+        interpolated_feat = F.grid_sample(v.to(self.r2d_gpu), grid, align_corners=True).permute(0, 2, 3, 1)
 
 
-        # # selecting key positions and their attention weights
-        # selector_outputs = self.r2d_selector(q_r)
-        # attention_scores = self.r2d_attn_weights(q_r)
-        # locations_x = selector_outputs[:, :, 0 : self.r2d_m * self.r2d_k]
-        # locations_y = selector_outputs[:, :, self.r2d_m * self.r2d_k :] 
+        # performing weighted sum of values
+        r2d_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
 
 
-        # # performing sampling of the value feature map at the given locations
-        # v = v_d.permute(0, 2, 1).reshape(B, self.reduced_dim, Hd, Wd)
-        # # print(f"input.shape = {v.shape}")
-        # grid = torch.stack((locations_x, locations_y), -1)
-        # grid = grid * 2 - 1
-        # # print(f"grid.shape = {grid.shape}")
-        # interpolated_feat = F.grid_sample(v, grid, align_corners=True).permute(0, 2, 3, 1)
-        # # print(f"interpolated_feat.shape = {interpolated_feat.shape}")
-        # # assert interpolated_feat.shape == (B, N, self.r2d_m * self.r2d_k, self.reduced_dim)
-
-
-        # # attempting to use the nearest feature by converting the position to integer, running into some issues here!
-        # # assert torch.all(locations_x <= 1.0)
-        # # assert torch.all(locations_y <= 1.0)
-        # # ids = ((locations_y * (Hd - 1)) + 1).int() * Wd + (locations_x * Wd).int() - 1
-        # # ids = ids.type(torch.int64)
-        # # assert torch.all(ids < Hd * Wd)
-        # # assert torch.all(ids >= 0)
-        # # interpolated_feat = torch.gather(v.unsqueeze(1).expand(B, N, v.shape[-2], v.shape[-1]), 2, ids.unsqueeze(-1).expand(*ids.shape, v.shape[-1]))
-        # # assert not torch.any(interpolated_feat.isnan())
-        # # print(f"interpolated_feat.shape = {interpolated_feat.shape}")
-
-
-        # # performing weighted sum of values
-        # # print(f"attention_scores.shape = {attention_scores.shape}")
-        # r2d_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
-
-
-        # # adding back to the RGB path
-        # local_cat_global_rgb = local_cat_global_rgb + r2d_feat
-        # local_cat_global_rgb = self.r2r_norm(local_cat_global_rgb)
+        # adding back to the RGB path
+        local_cat_global_rgb = local_cat_global_rgb + r2d_feat
+        local_cat_global_rgb = self.r2d_norm(local_cat_global_rgb)
 
 
 
+        """Preparing final features to use for classification"""
         # performing global average pooling
         local_cat_global_rgb = torch.mean(local_cat_global_rgb, -2)
         local_cat_global_depth = torch.mean(local_cat_global_depth, -2)
-        # print(f"r2d_feat.shape = {r2d_feat.shape}")
 
 
         # final_embedding = local_cat_global_depth
-        # final_embedding = local_cat_global_rgb 
-        final_embedding = local_cat_global_depth 
+        final_embedding = local_cat_global_rgb 
+        # final_embedding = local_cat_global_depth 
         final_embedding = final_embedding.to(self.target_gpu)
 
 
