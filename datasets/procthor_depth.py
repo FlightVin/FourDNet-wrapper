@@ -22,13 +22,13 @@ class ProcThor_Depth(BaseImageDataset):
     # images: 12936 (train) + 3368 (query) + 15913 (gallery)
     """
 
-    dataset_dir = "procthor_depth"
+    dataset_dir = "procthor_depth_12_6"
 
     def __init__(self, root="", verbose=True, pid_begin=0, **kwargs):
         super().__init__()
         self.dataset_dir = osp.join(root, self.dataset_dir)
         self.train_dir = osp.join(self.dataset_dir, "train")
-        self.query_dir = osp.join(self.dataset_dir, "val")
+        self.query_dir = osp.join(self.dataset_dir, "test")
         self.gallery_dir = osp.join(self.dataset_dir, "test")
 
         self._check_before_run()

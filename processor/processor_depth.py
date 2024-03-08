@@ -15,7 +15,8 @@ import shutil
 WANDB = True
 EMBEDDING_DIM = 128
 NUM_INSTANCES = 12
-EXPERIMENT_NAME = "FourDNet_R2R" 
+EXPERIMENT_NAME = "norefactor" 
+PROJECT_NAME = "Experiments5"
 
 def do_train_4DNet(cfg,
              model,
@@ -29,7 +30,8 @@ def do_train_4DNet(cfg,
              num_query,
              target_gpu):
     if WANDB:
-        wandb.init(project="ReID", name=EXPERIMENT_NAME)
+        wandb.login(key="6ab81b60046f7d7f6a7dca014a2fcaf4538ff14a")
+        wandb.init(project=PROJECT_NAME, name=EXPERIMENT_NAME)
     if os.path.exists(f"vis_positions"):
         shutil.rmtree(f"vis_positions")
     os.mkdir(f"vis_positions")
@@ -129,7 +131,7 @@ def do_train_4DNet(cfg,
                 torch.save(model.state_dict(),
                            os.path.join(f"logs/{EXPERIMENT_NAME}/{epoch}.pth"))
 
-        if epoch % eval_period == 0:
+        if epoch % 5 == 0:
             if cfg.MODEL.DIST_TRAIN:
                 val_acc_meter = AverageMeter()
                 val_loss_meter = AverageMeter()
