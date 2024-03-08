@@ -520,6 +520,21 @@ class build_FourDNet(nn.Module):
         self.r2r_norm = nn.LayerNorm(self.reduced_dim).to(self.r2r_gpu)
 
 
+        # D2R cross attention
+        self.d2r_k = 3
+        self.d2r_m = 8
+        self.d2r_selector = nn.Sequential(
+            nn.Linear(self.reduced_dim, 2 * self.d2r_m * self.d2r_k),
+            nn.Sigmoid(),
+        ).to(self.d2r_gpu) 
+        self.d2r_attn_weights = nn.Sequential(
+            nn.Linear(self.reduced_dim, self.d2r_m * self.d2r_k),
+            nn.Softmax(dim=-1)
+        ).to(self.d2r_gpu)
+        self.d2r_norm = nn.LayerNorm(self.reduced_dim).to(self.d2r_gpu)
+
+
+
         # D2D self attention
         self.d2d_k = 3
         self.d2d_m = 8
@@ -546,13 +561,6 @@ class build_FourDNet(nn.Module):
 
     def forward(self, rgb, depth, label=None, cam_label= None, view_label=None):  # label is unused if self.cos_layer == 'no'
         B = rgb.shape[0]
-        # print(f"rgb.shape = {rgb.shape}")
-        # print(f"torch.max(depth) = {torch.max(depth)}")
-        # print(f"torch.min(depth) = {torch.min(depth)}")
-        # print()
-        # print()
-        # depth = depth.half()
-
 
         # visualizing the inputs
         # print(f"len(np.unique(depth)) = {len(torch.unique(depth))}")
@@ -616,7 +624,6 @@ class build_FourDNet(nn.Module):
         local_cat_global_depth = self.merge_local_global_depth(local_cat_global_depth)
 
 
-
         # defining the queries and values for both RGB and depth
         q_r = self.Q_r(local_cat_global_rgb.to(self.r2r_gpu))
         v_r = self.V_r(local_cat_global_rgb.to(self.r2r_gpu))
@@ -672,6 +679,30 @@ class build_FourDNet(nn.Module):
         local_cat_global_depth = self.d2d_norm(local_cat_global_depth)
 
 
+        """D2R Cross Attention"""
+        # selecting key positions and their attention weights
+        selector_outputs = self.d2r_selector(q_d.to(self.d2r_gpu))
+        attention_scores = self.d2r_attn_weights(q_d.to(self.d2r_gpu))
+        locations_x = selector_outputs[:, :, 0 : self.d2r_m * self.d2r_k]
+        locations_y = selector_outputs[:, :, self.d2r_m * self.d2r_k :] 
+
+
+        # performing sampling of the value feature map at the given locations
+        v = v_r.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
+        grid = torch.stack((locations_x, locations_y), -1)
+        grid = grid * 2 - 1
+        interpolated_feat = F.grid_sample(v.to(self.d2r_gpu), grid, align_corners=True).permute(0, 2, 3, 1)
+
+
+        # performing weighted sum of values
+        d2r_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
+
+
+        # adding back to the depth path
+        local_cat_global_depth = local_cat_global_depth + d2r_feat
+        local_cat_global_depth = self.d2r_norm(local_cat_global_depth)
+
+
         """R2D Cross Attention"""
         # selecting key positions and their attention weights
         selector_outputs = self.r2d_selector(q_r.to(self.r2d_gpu))
@@ -703,8 +734,8 @@ class build_FourDNet(nn.Module):
         local_cat_global_depth = torch.mean(local_cat_global_depth, -2)
 
 
-        # final_embedding = local_cat_global_depth
-        final_embedding = local_cat_global_rgb 
+        final_embedding = local_cat_global_depth
+        # final_embedding = local_cat_global_rgb 
         # final_embedding = local_cat_global_depth 
         final_embedding = final_embedding.to(self.target_gpu)
 
