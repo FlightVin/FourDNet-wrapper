@@ -13,41 +13,6 @@ import numpy as np
 import cv2
 
 
-def bilinear_interpolationv2(features, ids): 
-    B = features.shape[0]
-    N = features.shape[1]
-    return torch.gather(features.unsqueeze(1).expand(B, N, features.shape[-2], features.shape[-1]), 2, ids.unsqueeze(-1).expand(*ids.shape, features.shape[-1]))
-
-
-
-def bilinear_interpolation(f, x1, x2, y1, y2, x, y):
-    x1 = x1.type(torch.float32) 
-    x2 = x2.type(torch.float32) 
-    y1 = y1.type(torch.float32) 
-    y2 = y2.type(torch.float32) 
-    x = x.type(torch.float32) 
-    y = y.type(torch.float32) 
-    h = y2 - y1
-    w = x2 - x1
-    assert torch.all(h >= 0) and torch.all(w >= 0)
-    assert torch.all(h <= 1) and torch.all(w <= 1)
-    coeff = 1 / (h * w)
-    coeff[(h == 0) | (w == 0)] = 2
-    x = torch.cat(((x2 - x).unsqueeze(-1), (x - x1).unsqueeze(-1)), -1)
-    y = torch.cat(((y2 - y).unsqueeze(-1), (y - y1).unsqueeze(-1)), -1)
-    x[w == 0] = torch.tensor([1.0, 1.0]).to(x.device)
-    y[h == 0] = torch.tensor([1.0, 1.0]).to(y.device)
-    x = x.unsqueeze(-2).repeat(1, 1, 1, f.size(-1), 1).unsqueeze(-1)
-    M = f.transpose(-1, -2).reshape(*f.shape[:-2], f.shape[-1], 2, 2)
-    y = y.unsqueeze(-2).repeat(1, 1, 1, f.size(-1), 1).unsqueeze(-1)
-    assert not torch.any(coeff.isnan())
-    assert not torch.any(M.isnan())
-    assert not torch.any(x.isnan())
-    assert not torch.any(y.isnan())
-    res = coeff.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) * x.transpose(-1, -2) @ M @ y
-    assert not torch.any(res.isnan())
-    return res
-
 
 def shuffle_unit(features, shift, group, begin=1):
 
@@ -486,8 +451,13 @@ class build_FourDNet(nn.Module):
         # defining the RGB backbone
         self.base = factory[cfg.MODEL.TRANSFORMER_TYPE](img_size=cfg.INPUT.SIZE_TRAIN, sie_xishu=cfg.MODEL.SIE_COE, local_feature=cfg.MODEL.JPM, camera=camera_num, view=view_num, stride_size=cfg.MODEL.STRIDE_SIZE, drop_path_rate=cfg.MODEL.DROP_PATH).to(self.gpu0)
 
+        # defining the depth backbone
+        self.base2 = factory[cfg.MODEL.TRANSFORMER_TYPE](img_size=cfg.INPUT.SIZE_TRAIN, sie_xishu=cfg.MODEL.SIE_COE, local_feature=cfg.MODEL.JPM, camera=camera_num, view=view_num, stride_size=cfg.MODEL.STRIDE_SIZE, drop_path_rate=cfg.MODEL.DROP_PATH).to(self.gpu1)
+
+
         if pretrain_choice == 'imagenet':
             self.base.load_param(model_path)
+            self.base2.load_param(model_path)
             print('Loading pretrained ImageNet model......from {}'.format(model_path))
         
 
@@ -498,32 +468,33 @@ class build_FourDNet(nn.Module):
         # project the RGB features to smaller dimension
         self.project_local_rgb = nn.Linear(self.in_planes, self.reduced_dim).to(self.gpu0)
         self.project_global_rgb = nn.Linear(self.in_planes, self.reduced_dim).to(self.gpu0)
-        self.merge_local_global_rgb = nn.Linear(128 + 128, self.reduced_dim).to(self.gpu0)
-
-        
-        # defining the D backbone 
-        self.vgg = VGGFeatures().to(self.gpu1)
-        self.merge_local_global_depth = nn.Linear(128 + 128, self.reduced_dim).to(self.gpu1)
-        self.project_global_depth = nn.Conv2d(512, 128, 3, 1, 1).to(self.gpu1)
+        self.merge_local_global_rgb = nn.Linear(2 * self.reduced_dim, self.reduced_dim).to(self.gpu0)
 
 
-        # the depth-classifier at the end of depth branch
-        # self.ffn = nn.Conv2d(512, self.reduced_dim, 7, 1, 0)
-        # self.classifier = nn.Linear(self.reduced_dim, num_classes)
+        # project the depth features to smaller dimension
+        self.project_local_depth = nn.Linear(self.in_planes, self.reduced_dim).to(self.gpu1)
+        self.project_global_depth = nn.Linear(self.in_planes, self.reduced_dim).to(self.gpu1)
+        self.merge_local_global_depth = nn.Linear(2 * self.reduced_dim, self.reduced_dim).to(self.gpu1)
+
+
+
+        # defining the GPUs
+        self.r2r_gpu = self.gpu0
+        self.r2d_gpu = self.gpu0
+        self.d2d_gpu = self.gpu1
+        self.d2r_gpu = self.gpu1
 
 
         # query and value transformations
-        self.Q_r = nn.Linear(self.reduced_dim, self.reduced_dim)
-        self.V_r = nn.Linear(self.reduced_dim, self.reduced_dim)
-        self.V_d = nn.Linear(self.reduced_dim, self.reduced_dim)
+        self.Q_r = nn.Linear(self.reduced_dim, self.reduced_dim).to(self.r2r_gpu)
+        self.V_r = nn.Linear(self.reduced_dim, self.reduced_dim).to(self.r2r_gpu)
+        self.Q_d = nn.Linear(self.reduced_dim, self.reduced_dim).to(self.d2d_gpu)
+        self.V_d = nn.Linear(self.reduced_dim, self.reduced_dim).to(self.d2d_gpu)
 
 
         # R2D cross attention
-        self.r2d_gpu = self.gpu0
         self.r2d_k = 3
         self.r2d_m = 8
-        # self.r2d_Q = nn.Linear(self.reduced_dim, self.reduced_dim).to(self.r2d_gpu)
-        # self.r2d_V = nn.Linear(self.reduced_dim, self.reduced_dim).to(self.r2d_gpu)
         self.r2d_selector = nn.Sequential(
             nn.Linear(self.reduced_dim, 2 * self.r2d_m * self.r2d_k),
             nn.Sigmoid(),
@@ -536,12 +507,8 @@ class build_FourDNet(nn.Module):
 
 
         # R2R self attention
-        self.r2r_gpu = self.gpu0
-        # R2R self attention
         self.r2r_k = 3
         self.r2r_m = 8
-        # self.r2r_Q = nn.Linear(self.reduced_dim, self.reduced_dim).to(self.r2r_gpu)
-        # self.r2r_V = nn.Linear(self.reduced_dim, self.reduced_dim).to(self.r2r_gpu)
         self.r2r_selector = nn.Sequential(
             nn.Linear(self.reduced_dim, 2 * self.r2r_m * self.r2r_k),
             nn.Sigmoid(),
@@ -594,17 +561,17 @@ class build_FourDNet(nn.Module):
 
 
         # extracting the RGB features
-        features = self.base(rgb, cam_label=cam_label, view_label=view_label)
-        N = features.shape[1] - 1
+        rgb_features = self.base(rgb, cam_label=cam_label, view_label=view_label)
+        N = rgb_features.shape[1] - 1
 
 
         # global rgb features
-        global_rgb = features[:, 0]
+        global_rgb = rgb_features[:, 0]
         global_rgb = self.project_global_rgb(global_rgb)
 
 
         # local rgb features
-        local_rgb = features[:, 1:]
+        local_rgb = rgb_features[:, 1:]
         local_rgb = self.project_local_rgb(local_rgb)
 
 
@@ -613,38 +580,33 @@ class build_FourDNet(nn.Module):
         local_cat_global_rgb = self.merge_local_global_rgb(local_cat_global_rgb)
 
 
-        # depth features
-        features4, features20 = self.vgg(depth)
-        # features4 = torch.rand(B, 128, 112, 112).to(0)
-        # features20 = torch.rand(B, 512, 7, 7).to(0)
-        Hd, Wd = features4.shape[-2], features4.shape[-1]
-        features20 = F.interpolate(features20, (112, 112))
-        global_depth = self.project_global_depth(features20)
-        local_cat_global_depth = torch.cat((
-            global_depth,
-            features4
-        ), 1).permute(0, 2, 3, 1).reshape(B, 112 * 112, 128 + 128)
-        local_cat_global_depth = self.merge_local_global_depth(local_cat_global_depth)
-        # print(f"Hd = {Hd}")
-        # print(f"Wd = {Wd}")
+        # extracting depth features
+        depth_features = self.base2(rgb.to(self.gpu1), cam_label=cam_label, view_label=view_label)
+        N = depth_features.shape[1] - 1
 
+
+        # global depth features
+        global_depth = depth_features[:, 0]
+        global_depth = self.project_global_depth(global_depth)
+
+
+        # local depth features
+        local_depth = depth_features[:, 1:]
+        local_depth = self.project_local_depth(local_depth)
+
+
+        # concatenating local and global rgb features 
+        local_cat_global_depth = torch.cat((global_depth.unsqueeze(1).repeat(1, N, 1), local_depth), -1)
+        local_cat_global_depth = self.merge_local_global_depth(local_cat_global_depth)
+
+
+
+        # defining the queries and values for both RGB and depth
+        q_r = self.Q_r(local_cat_global_rgb.to(self.r2r_gpu))
+        v_r = self.V_r(local_cat_global_rgb.to(self.r2r_gpu))
 
 
         """R2R Self Attention"""
-        # print(f"starting with R2R Self Attention")
-        self.Q_r = self.Q_r.to(self.r2r_gpu)
-        self.V_r = self.V_r.to(self.r2r_gpu)
-        q_r = self.Q_r(local_cat_global_rgb.to(self.r2r_gpu))
-        v_r = self.V_r(local_cat_global_rgb.to(self.r2r_gpu))
-        # print(f"q.shape = {q.shape}")
-        # print(f"v.shape = {v.shape}")
-
-
-        # transferring queries and values to r2r gpu
-        q_r = q_r.to(self.r2r_gpu)
-        v_r = v_r.to(self.r2r_gpu)
-
-
         # selecting key positions and their attention weights
         selector_outputs = self.r2r_selector(q_r)
         attention_scores = self.r2r_attn_weights(q_r)
@@ -653,19 +615,13 @@ class build_FourDNet(nn.Module):
 
 
         # performing sampling of the value feature map at the given locations
-        # print(f"v_r.shape = {v_r.shape}")
         v = v_r.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
-        # print(f"input.shape = {v.shape}")
         grid = torch.stack((locations_x, locations_y), -1)
         grid = grid * 2 - 1
-        # print(f"grid.shape = {grid.shape}")
         interpolated_feat = F.grid_sample(v, grid, align_corners=True).permute(0, 2, 3, 1)
-        # print(f"interpolated_feat.shape = {interpolated_feat.shape}")
-        # assert interpolated_feat.shape == (B, N, self.r2r_m * self.r2r_k, self.reduced_dim)
 
 
         # performing weighted sum of values
-        # print(f"attention_scores.shape = {attention_scores.shape}")
         r2r_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
 
 
