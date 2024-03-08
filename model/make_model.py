@@ -676,7 +676,7 @@ class build_FourDNet(nn.Module):
         # selecting key positions and their attention weights
         selector_outputs = self.d2d_selector(q_d)
         attention_scores = self.d2d_attn_weights(q_d)
-        locations_x = selector_outputs[:, :, 0 : self.d2d_m * self.d2d_k]
+        locations_x = selector_outputs[:, :, : self.d2d_m * self.d2d_k]
         locations_y = selector_outputs[:, :, self.d2d_m * self.d2d_k :] 
 
 
@@ -697,29 +697,29 @@ class build_FourDNet(nn.Module):
         local_cat_global_depth = self.d2d_norm(local_cat_global_depth)
 
 
-        """D2R Cross Attention"""
-        # selecting key positions and their attention weights
-        selector_outputs = self.d2r_selector(q_d.to(self.d2r_gpu))
-        attention_scores = self.d2r_attn_weights(q_d.to(self.d2r_gpu))
-        locations_x = selector_outputs[:, :, 0 : self.d2r_m * self.d2r_k]
-        locations_y = selector_outputs[:, :, self.d2r_m * self.d2r_k :] 
+        # """D2R Cross Attention"""
+        # # selecting key positions and their attention weights
+        # selector_outputs = self.d2r_selector(q_d.to(self.d2r_gpu))
+        # attention_scores = self.d2r_attn_weights(q_d.to(self.d2r_gpu))
+        # locations_x = selector_outputs[:, :, 0 : self.d2r_m * self.d2r_k]
+        # locations_y = selector_outputs[:, :, self.d2r_m * self.d2r_k :] 
 
 
-        # performing sampling of the value feature map at the given locations
-        v = v_r.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
-        grid = torch.stack((locations_x, locations_y), -1)
-        grid = grid * 2 - 1
-        interpolated_feat = F.grid_sample(v.to(self.d2r_gpu), grid, align_corners=True).permute(0, 2, 3, 1)
+        # # performing sampling of the value feature map at the given locations
+        # v = v_r.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
+        # grid = torch.stack((locations_x, locations_y), -1)
+        # grid = grid * 2 - 1
+        # interpolated_feat = F.grid_sample(v.to(self.d2r_gpu), grid, align_corners=True).permute(0, 2, 3, 1)
 
 
-        # performing weighted sum of values
-        d2r_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
-        d2r_feat = self.d2r_ffn(d2r_feat)
+        # # performing weighted sum of values
+        # d2r_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
+        # d2r_feat = self.d2r_ffn(d2r_feat)
 
 
-        # adding back to the depth path
-        local_cat_global_depth = local_cat_global_depth + d2r_feat
-        local_cat_global_depth = self.d2r_norm(local_cat_global_depth)
+        # # adding back to the depth path
+        # local_cat_global_depth = local_cat_global_depth + d2r_feat
+        # local_cat_global_depth = self.d2r_norm(local_cat_global_depth)
 
 
         # """R2D Cross Attention"""
@@ -754,7 +754,8 @@ class build_FourDNet(nn.Module):
 
 
         # final_embedding = local_cat_global_depth.to(self.target_gpu) + local_cat_global_rgb.to(self.target_gpu)
-        final_embedding = local_cat_global_rgb.to(self.target_gpu) 
+        # final_embedding = local_cat_global_rgb.to(self.target_gpu) 
+        final_embedding = local_cat_global_depth.to(self.target_gpu) 
 
 
         # compute the cls scores and return
