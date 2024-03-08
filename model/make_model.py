@@ -478,7 +478,6 @@ class build_FourDNet(nn.Module):
         self.merge_local_global_depth = nn.Linear(2 * self.reduced_dim, self.reduced_dim).to(self.gpu1)
 
 
-
         # defining the GPUs
         self.r2r_gpu = self.gpu0
         self.r2d_gpu = self.gpu0
@@ -505,6 +504,7 @@ class build_FourDNet(nn.Module):
             nn.Softmax(dim=-1)
         ).to(self.r2d_gpu)
         self.r2d_norm = nn.LayerNorm(self.reduced_dim).to(self.r2d_gpu)
+        self.r2d_ffn = nn.Linear(self.reduced_dim, self.reduced_dim).to(self.r2d_gpu)
 
 
         # R2R self attention
@@ -519,6 +519,7 @@ class build_FourDNet(nn.Module):
             nn.Softmax(dim=-1)
         ).to(self.r2r_gpu)
         self.r2r_norm = nn.LayerNorm(self.reduced_dim).to(self.r2r_gpu)
+        self.r2r_ffn = nn.Linear(self.reduced_dim, self.reduced_dim).to(self.r2r_gpu)
 
 
         # D2R cross attention
@@ -533,6 +534,7 @@ class build_FourDNet(nn.Module):
             nn.Softmax(dim=-1)
         ).to(self.d2r_gpu)
         self.d2r_norm = nn.LayerNorm(self.reduced_dim).to(self.d2r_gpu)
+        self.d2r_ffn = nn.Linear(self.reduced_dim, self.reduced_dim).to(self.d2r_gpu)
 
 
 
@@ -548,6 +550,7 @@ class build_FourDNet(nn.Module):
             nn.Softmax(dim=-1)
         ).to(self.d2d_gpu)
         self.d2d_norm = nn.LayerNorm(self.reduced_dim).to(self.d2d_gpu)
+        self.d2d_ffn = nn.Linear(self.reduced_dim, self.reduced_dim).to(self.d2d_gpu)
 
 
         # the final classifier
@@ -557,7 +560,7 @@ class build_FourDNet(nn.Module):
         # development stage
         self.visualize = True
         self.vis_count = 0
-        self.max_vis = 10
+        self.max_vis = 25
         if self.visualize and osp.exists(f"vis"):
             shutil.rmtree(f"vis")
 
@@ -568,14 +571,15 @@ class build_FourDNet(nn.Module):
         depth = depth.float().to(self.gpu1)
 
 
-        with torch.no_grad():
-            # random modality dropout
-            B = rgb.shape[0]
-            p = torch.randint(0, 5, size=(B, ))
-            rgb_dropout_ids = (p == 0).to(self.gpu0)
-            depth_dropout_ids = (p == 1).to(self.gpu1)
-            rgb[rgb_dropout_ids] = torch.zeros(rgb[0].shape).to(self.gpu0)
-            depth[depth_dropout_ids] = torch.zeros(depth[0].shape).to(self.gpu1)
+        if self.training:
+            with torch.no_grad():
+                # random modality dropout
+                B = rgb.shape[0]
+                p = torch.randint(0, 5, size=(B, ))
+                rgb_dropout_ids = ((p == 0) | (p == 2)).to(self.gpu0)
+                depth_dropout_ids = ((p == 1) | (p == 3)).to(self.gpu1)
+                rgb[rgb_dropout_ids] = torch.zeros(rgb[0].shape).to(self.gpu0)
+                depth[depth_dropout_ids] = torch.zeros(depth[0].shape).to(self.gpu1)
 
 
         # visualizing the inputs
@@ -659,6 +663,7 @@ class build_FourDNet(nn.Module):
 
         # performing weighted sum of values
         r2r_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
+        r2r_feat = self.r2r_ffn(r2r_feat)
 
 
         # adding back to the RGB path
@@ -683,6 +688,7 @@ class build_FourDNet(nn.Module):
 
         # performing weighted sum of values
         d2d_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
+        d2d_feat = self.d2d_ffn(d2d_feat)
 
 
         # adding back to the depth path
@@ -707,6 +713,7 @@ class build_FourDNet(nn.Module):
 
         # performing weighted sum of values
         d2r_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
+        d2r_feat = self.d2r_ffn(d2r_feat)
 
 
         # adding back to the depth path
@@ -731,6 +738,7 @@ class build_FourDNet(nn.Module):
 
         # performing weighted sum of values
         r2d_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
+        r2d_feat = self.r2d_ffn(r2d_feat)
 
 
         # adding back to the RGB path
