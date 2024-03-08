@@ -563,7 +563,7 @@ class build_FourDNet(nn.Module):
         self.max_vis = 25
         if self.visualize and osp.exists(f"vis"):
             shutil.rmtree(f"vis")
-        self.dropout = False
+        self.dropout = True
 
 
         # hypernet
@@ -783,7 +783,6 @@ class build_FourDNet(nn.Module):
         # final_embedding = local_cat_global_depth.to(self.target_gpu) 
 
         final_embedding = torch.mean(final_embedding, dim=-2)
-
 
         # compute the cls scores and return
         cls_score = self.classifier(final_embedding)

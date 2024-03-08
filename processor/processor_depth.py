@@ -15,7 +15,7 @@ import shutil
 WANDB = True
 EMBEDDING_DIM = 128
 NUM_INSTANCES = 12
-EXPERIMENT_NAME = "Experiment5" 
+EXPERIMENT_NAME = "Experiment6b" 
 PROJECT_NAME = "Experiments_Full"
 
 def do_train_4DNet(cfg,
@@ -189,6 +189,37 @@ def do_train_4DNet(cfg,
                 plt.imshow(scores, vmin=0.0, vmax=1.0)
                 plt.savefig(f"logs/{EXPERIMENT_NAME}/rgb_{epoch}.jpg")
 
+            batch_size = cfg.SOLVER.IMS_PER_BATCH
+            embeddings = torch.empty((len(val_loader) * batch_size, EMBEDDING_DIM))
+            count = 0
+            with torch.no_grad():
+                for n_iter, (img, depth, vid, target_cam, target_view) in enumerate(val_loader):
+                    img = img.to(device)
+                    depth = depth.to(device)
+                    target = vid.to(device)
+                    target_cam = target_cam.to(device)
+                    target_view = target_view.to(device)
+                    feat = model(img, depth, target, cam_label=target_cam, view_label=target_view )
+                    feat = feat.cpu()
+                    # loss = loss_fn(score, feat, target, target_cam)
+                    embeddings[n_iter * batch_size : n_iter * batch_size + img.shape[0]] = feat
+                    count += img.shape[0]
+                embeddings = embeddings[:count]
+                # scores = F.cosine_similarity(embeddings.unsqueeze(0).repeat(count, 1, 1), embeddings.unsqueeze(1).repeat(1, count, 1))
+
+                print(f"computing the confusion matrix for the combined use case...")
+                scores = torch.zeros((count, count))
+                for i in tqdm(range(scores.shape[0])):
+                    for j in range(scores.shape[1]):
+                        scores[i][j] = embeddings[i] @ embeddings[j] / (torch.norm(embeddings[i]) * torch.norm(embeddings[j]))
+                positive_score = sum(torch.sum(scores[i : i + NUM_INSTANCES, i : i + NUM_INSTANCES]) for i in range(0, scores.shape[0], NUM_INSTANCES))
+                negative_score = torch.sum(scores) - positive_score
+                positive_score = positive_score / (count * count)
+                negative_score = negative_score / (count * count)
+                plt.figure(figsize=(20, 20))
+                plt.imshow(scores, vmin=0.0, vmax=1.0)
+                plt.savefig(f"logs/{EXPERIMENT_NAME}/rgb_depth_{epoch}.jpg")
+
 
 
                 if WANDB:
@@ -201,8 +232,12 @@ def do_train_4DNet(cfg,
                         f"negative_score": negative_score,
                         f"depth_confusion_matrix": wandb.Image(f"logs/{EXPERIMENT_NAME}/depth_{epoch}.jpg"),
                         f"rgb_confusion_matrix": wandb.Image(f"logs/{EXPERIMENT_NAME}/rgb_{epoch}.jpg"),
+                        f"combined_confusion_matrix": wandb.Image(f"logs/{EXPERIMENT_NAME}/rgb_depth_{epoch}.jpg"),
                     })
             torch.cuda.empty_cache()
+
+
+
 
                 # for n_iter, (img, vid, camid, camids, target_view, _) in enumerate(val_loader):
                 #     with torch.no_grad():
