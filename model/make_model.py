@@ -563,20 +563,19 @@ class build_FourDNet(nn.Module):
         B = rgb.shape[0]
 
         # visualizing the inputs
-        # print(f"len(np.unique(depth)) = {len(torch.unique(depth))}")
-        # if self.visualize and self.vis_count < self.max_vis:
-        #     for batch_idx in range(B):
-        #         depth_img = depth[batch_idx][0]
-        #         rgb_img = (rgb[batch_idx].permute(1, 2, 0) + 0.5) * 255.0
-        #         rgb_img = torch.clamp(rgb_img, 0.0, 255.0).type(torch.int32) 
-        #         fig, axs = plt.subplots(1, 2)
-        #         axs[0].imshow(depth_img.cpu().numpy())
-        #         axs[1].imshow(rgb_img.cpu().numpy())
-        #         if not os.path.exists(f"vis/{label[batch_idx]}"):
-        #             os.mkdir(f"vis/{label[batch_idx]}")
-        #         plt.savefig(f"vis/{label[batch_idx]}/depth{self.vis_count}.jpg")
-        #         plt.close()
-        #         self.vis_count += 1
+        if self.visualize and self.vis_count < self.max_vis:
+            for batch_idx in range(B):
+                depth_img = depth[batch_idx][0]
+                rgb_img = (rgb[batch_idx].permute(1, 2, 0) + 0.5) * 255.0
+                rgb_img = torch.clamp(rgb_img, 0.0, 255.0).type(torch.int32) 
+                fig, axs = plt.subplots(1, 2)
+                axs[0].imshow(depth_img.cpu().numpy())
+                axs[1].imshow(rgb_img.cpu().numpy())
+                if not os.path.exists(f"vis/{label[batch_idx]}"):
+                    os.mkdir(f"vis/{label[batch_idx]}")
+                plt.savefig(f"vis/{label[batch_idx]}/depth{self.vis_count}.jpg")
+                plt.close()
+                self.vis_count += 1
 
 
         # converting the inputs to float
@@ -605,7 +604,7 @@ class build_FourDNet(nn.Module):
 
 
         # extracting depth features
-        depth_features = self.base2(rgb.to(self.gpu1), cam_label=cam_label, view_label=view_label)
+        depth_features = self.base2(depth.to(self.gpu1), cam_label=cam_label, view_label=view_label)
         N = depth_features.shape[1] - 1
 
 
@@ -679,28 +678,28 @@ class build_FourDNet(nn.Module):
         local_cat_global_depth = self.d2d_norm(local_cat_global_depth)
 
 
-        """D2R Cross Attention"""
-        # selecting key positions and their attention weights
-        selector_outputs = self.d2r_selector(q_d.to(self.d2r_gpu))
-        attention_scores = self.d2r_attn_weights(q_d.to(self.d2r_gpu))
-        locations_x = selector_outputs[:, :, 0 : self.d2r_m * self.d2r_k]
-        locations_y = selector_outputs[:, :, self.d2r_m * self.d2r_k :] 
+        # """D2R Cross Attention"""
+        # # selecting key positions and their attention weights
+        # selector_outputs = self.d2r_selector(q_d.to(self.d2r_gpu))
+        # attention_scores = self.d2r_attn_weights(q_d.to(self.d2r_gpu))
+        # locations_x = selector_outputs[:, :, 0 : self.d2r_m * self.d2r_k]
+        # locations_y = selector_outputs[:, :, self.d2r_m * self.d2r_k :] 
 
 
-        # performing sampling of the value feature map at the given locations
-        v = v_r.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
-        grid = torch.stack((locations_x, locations_y), -1)
-        grid = grid * 2 - 1
-        interpolated_feat = F.grid_sample(v.to(self.d2r_gpu), grid, align_corners=True).permute(0, 2, 3, 1)
+        # # performing sampling of the value feature map at the given locations
+        # v = v_r.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
+        # grid = torch.stack((locations_x, locations_y), -1)
+        # grid = grid * 2 - 1
+        # interpolated_feat = F.grid_sample(v.to(self.d2r_gpu), grid, align_corners=True).permute(0, 2, 3, 1)
 
 
-        # performing weighted sum of values
-        d2r_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
+        # # performing weighted sum of values
+        # d2r_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
 
 
-        # adding back to the depth path
-        local_cat_global_depth = local_cat_global_depth + d2r_feat
-        local_cat_global_depth = self.d2r_norm(local_cat_global_depth)
+        # # adding back to the depth path
+        # local_cat_global_depth = local_cat_global_depth + d2r_feat
+        # local_cat_global_depth = self.d2r_norm(local_cat_global_depth)
 
 
         """R2D Cross Attention"""
@@ -736,7 +735,6 @@ class build_FourDNet(nn.Module):
 
         final_embedding = local_cat_global_depth
         # final_embedding = local_cat_global_rgb 
-        # final_embedding = local_cat_global_depth 
         final_embedding = final_embedding.to(self.target_gpu)
 
 
