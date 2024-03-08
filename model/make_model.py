@@ -697,54 +697,54 @@ class build_FourDNet(nn.Module):
         local_cat_global_depth = self.d2d_norm(local_cat_global_depth)
 
 
-        # """D2R Cross Attention"""
-        # # selecting key positions and their attention weights
-        # selector_outputs = self.d2r_selector(q_d.to(self.d2r_gpu))
-        # attention_scores = self.d2r_attn_weights(q_d.to(self.d2r_gpu))
-        # locations_x = selector_outputs[:, :, 0 : self.d2r_m * self.d2r_k]
-        # locations_y = selector_outputs[:, :, self.d2r_m * self.d2r_k :] 
+        """D2R Cross Attention"""
+        # selecting key positions and their attention weights
+        selector_outputs = self.d2r_selector(q_d.to(self.d2r_gpu))
+        attention_scores = self.d2r_attn_weights(q_d.to(self.d2r_gpu))
+        locations_x = selector_outputs[:, :, 0 : self.d2r_m * self.d2r_k]
+        locations_y = selector_outputs[:, :, self.d2r_m * self.d2r_k :] 
 
 
-        # # performing sampling of the value feature map at the given locations
-        # v = v_r.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
-        # grid = torch.stack((locations_x, locations_y), -1)
-        # grid = grid * 2 - 1
-        # interpolated_feat = F.grid_sample(v.to(self.d2r_gpu), grid, align_corners=True).permute(0, 2, 3, 1)
+        # performing sampling of the value feature map at the given locations
+        v = v_r.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
+        grid = torch.stack((locations_x, locations_y), -1)
+        grid = grid * 2 - 1
+        interpolated_feat = F.grid_sample(v.to(self.d2r_gpu), grid, align_corners=True).permute(0, 2, 3, 1)
 
 
-        # # performing weighted sum of values
-        # d2r_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
-        # d2r_feat = self.d2r_ffn(d2r_feat)
+        # performing weighted sum of values
+        d2r_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
+        d2r_feat = self.d2r_ffn(d2r_feat)
 
 
-        # # adding back to the depth path
-        # local_cat_global_depth = local_cat_global_depth + d2r_feat
-        # local_cat_global_depth = self.d2r_norm(local_cat_global_depth)
+        # adding back to the depth path
+        local_cat_global_depth = local_cat_global_depth + d2r_feat
+        local_cat_global_depth = self.d2r_norm(local_cat_global_depth)
 
 
-        # """R2D Cross Attention"""
-        # # selecting key positions and their attention weights
-        # selector_outputs = self.r2d_selector(q_r.to(self.r2d_gpu))
-        # attention_scores = self.r2d_attn_weights(q_r.to(self.r2d_gpu))
-        # locations_x = selector_outputs[:, :, 0 : self.r2d_m * self.r2d_k]
-        # locations_y = selector_outputs[:, :, self.r2d_m * self.r2d_k :] 
+        """R2D Cross Attention"""
+        # selecting key positions and their attention weights
+        selector_outputs = self.r2d_selector(q_r.to(self.r2d_gpu))
+        attention_scores = self.r2d_attn_weights(q_r.to(self.r2d_gpu))
+        locations_x = selector_outputs[:, :, 0 : self.r2d_m * self.r2d_k]
+        locations_y = selector_outputs[:, :, self.r2d_m * self.r2d_k :] 
 
 
-        # # performing sampling of the value feature map at the given locations
-        # v = v_d.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
-        # grid = torch.stack((locations_x, locations_y), -1)
-        # grid = grid * 2 - 1
-        # interpolated_feat = F.grid_sample(v.to(self.r2d_gpu), grid, align_corners=True).permute(0, 2, 3, 1)
+        # performing sampling of the value feature map at the given locations
+        v = v_d.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
+        grid = torch.stack((locations_x, locations_y), -1)
+        grid = grid * 2 - 1
+        interpolated_feat = F.grid_sample(v.to(self.r2d_gpu), grid, align_corners=True).permute(0, 2, 3, 1)
 
 
-        # # performing weighted sum of values
-        # r2d_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
-        # r2d_feat = self.r2d_ffn(r2d_feat)
+        # performing weighted sum of values
+        r2d_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
+        r2d_feat = self.r2d_ffn(r2d_feat)
 
 
-        # # adding back to the RGB path
-        # local_cat_global_rgb = local_cat_global_rgb + r2d_feat
-        # local_cat_global_rgb = self.r2d_norm(local_cat_global_rgb)
+        # adding back to the RGB path
+        local_cat_global_rgb = local_cat_global_rgb + r2d_feat
+        local_cat_global_rgb = self.r2d_norm(local_cat_global_rgb)
 
 
         """Preparing final features to use for classification"""
