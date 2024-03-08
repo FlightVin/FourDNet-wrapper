@@ -115,32 +115,24 @@ class RGBD_Dataset(Dataset):
         depth_path = osp.join(*(img_path.split("/")[:-1]), f"{img_name.split('.')[0]}.npy")
         # print(f"depth_path = {depth_path}") 
         assert os.path.exists(depth_path) 
-        # print(f"the depth path exists!")
-        # depth = cv2.imread(depth_path, cv2.IMREAD_GRAYSCALE)
-        # depth = cv2.resize(depth, (128, 256))
-        # depth = np.clip(depth, 0.0, self.max_depth)
-        # depth = depth / self.max_depth
-        depth = np.load(depth_path)
-        # print(f"loaded the depth successfully!")
-        # depth = cv2.resize(depth, (128, 256))
 
-        # """for VGG"""
-        depth = cv2.resize(depth, (224, 224))
-        depth = np.repeat(depth[:, :, None], 3, axis=-1)
-        # print(f"depth.shape = {depth.shape}")
+
+        # loading the depth
+        depth = np.load(depth_path)
+        depth = cv2.resize(depth, (128, 256))
+        depth = np.repeat(depth[None, :, :], 3, axis=0)
         depth = np.clip(depth, self.min_depth, self.max_depth)
         depth = depth / (self.max_depth - self.min_depth)
-        # depth = depth - 0.5
-        depth = depth - self.depth_mean[None, None, :]
-        depth = depth / self.depth_std[None, None, :]
-        # # assert img_path.find(".npy") == -1
-        img = read_image(img_path)
+        depth = depth - 0.5 
+        depth = depth / 0.5 
+        depth = torch.tensor(depth)
 
+
+        # loading the RGB
+        img = read_image(img_path)
         if self.transform is not None:
             img = self.transform(img)
 
-        if self.depth_transform is not None: 
-            depth = self.depth_transform(depth)
         
         # print(f"img.shape = {img.shape}")
         # print(f"depth.shape = {depth.shape}")
