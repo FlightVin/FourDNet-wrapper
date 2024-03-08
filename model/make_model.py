@@ -754,8 +754,8 @@ class build_FourDNet(nn.Module):
 
 
         # final_embedding = local_cat_global_depth.to(self.target_gpu) + local_cat_global_rgb.to(self.target_gpu)
-        # final_embedding = local_cat_global_rgb.to(self.target_gpu) 
-        final_embedding = local_cat_global_depth.to(self.target_gpu) 
+        final_embedding = local_cat_global_rgb.to(self.target_gpu) 
+        # final_embedding = local_cat_global_depth.to(self.target_gpu) 
 
 
         # compute the cls scores and return
