@@ -563,6 +563,7 @@ class build_FourDNet(nn.Module):
         self.max_vis = 25
         if self.visualize and osp.exists(f"vis"):
             shutil.rmtree(f"vis")
+        self.dropout = False
 
 
     def forward(self, rgb, depth, label=None, cam_label= None, view_label=None):  # label is unused if self.cos_layer == 'no'
@@ -572,7 +573,7 @@ class build_FourDNet(nn.Module):
 
 
         B = rgb.shape[0]
-        if self.training:
+        if self.dropout and self.training:
             with torch.no_grad():
                 # random modality dropout
                 p = torch.randint(0, 5, size=(B, ))
@@ -721,29 +722,29 @@ class build_FourDNet(nn.Module):
         local_cat_global_depth = self.d2r_norm(local_cat_global_depth)
 
 
-        """R2D Cross Attention"""
-        # selecting key positions and their attention weights
-        selector_outputs = self.r2d_selector(q_r.to(self.r2d_gpu))
-        attention_scores = self.r2d_attn_weights(q_r.to(self.r2d_gpu))
-        locations_x = selector_outputs[:, :, 0 : self.r2d_m * self.r2d_k]
-        locations_y = selector_outputs[:, :, self.r2d_m * self.r2d_k :] 
+        # """R2D Cross Attention"""
+        # # selecting key positions and their attention weights
+        # selector_outputs = self.r2d_selector(q_r.to(self.r2d_gpu))
+        # attention_scores = self.r2d_attn_weights(q_r.to(self.r2d_gpu))
+        # locations_x = selector_outputs[:, :, 0 : self.r2d_m * self.r2d_k]
+        # locations_y = selector_outputs[:, :, self.r2d_m * self.r2d_k :] 
 
 
-        # performing sampling of the value feature map at the given locations
-        v = v_d.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
-        grid = torch.stack((locations_x, locations_y), -1)
-        grid = grid * 2 - 1
-        interpolated_feat = F.grid_sample(v.to(self.r2d_gpu), grid, align_corners=True).permute(0, 2, 3, 1)
+        # # performing sampling of the value feature map at the given locations
+        # v = v_d.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
+        # grid = torch.stack((locations_x, locations_y), -1)
+        # grid = grid * 2 - 1
+        # interpolated_feat = F.grid_sample(v.to(self.r2d_gpu), grid, align_corners=True).permute(0, 2, 3, 1)
 
 
-        # performing weighted sum of values
-        r2d_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
-        r2d_feat = self.r2d_ffn(r2d_feat)
+        # # performing weighted sum of values
+        # r2d_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
+        # r2d_feat = self.r2d_ffn(r2d_feat)
 
 
-        # adding back to the RGB path
-        local_cat_global_rgb = local_cat_global_rgb + r2d_feat
-        local_cat_global_rgb = self.r2d_norm(local_cat_global_rgb)
+        # # adding back to the RGB path
+        # local_cat_global_rgb = local_cat_global_rgb + r2d_feat
+        # local_cat_global_rgb = self.r2d_norm(local_cat_global_rgb)
 
 
         """Preparing final features to use for classification"""
@@ -752,8 +753,8 @@ class build_FourDNet(nn.Module):
         local_cat_global_depth = torch.mean(local_cat_global_depth, -2)
 
 
-        final_embedding = local_cat_global_depth.to(self.target_gpu) + local_cat_global_rgb.to(self.target_gpu)
-        # final_embedding = local_cat_global_rgb 
+        # final_embedding = local_cat_global_depth.to(self.target_gpu) + local_cat_global_rgb.to(self.target_gpu)
+        final_embedding = local_cat_global_rgb.to(self.target_gpu) 
 
 
         # compute the cls scores and return
