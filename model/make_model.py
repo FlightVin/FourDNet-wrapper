@@ -503,7 +503,7 @@ class build_FourDNet(nn.Module):
             nn.Linear(self.reduced_dim, self.r2d_m * self.r2d_k),
             nn.Softmax(dim=-1)
         ).to(self.r2d_gpu)
-        self.r2d_norm = nn.LayerNorm(self.reduced_dim).to(self.r2d_gpu)
+        self.r2d_norm = nn.LayerNorm(self.reduced_dim).to(self.gpu0)
         self.r2d_ffn = nn.Linear(self.reduced_dim, self.reduced_dim).to(self.r2d_gpu)
 
 
@@ -518,7 +518,7 @@ class build_FourDNet(nn.Module):
             nn.Linear(self.reduced_dim, self.r2r_m * self.r2r_k),
             nn.Softmax(dim=-1)
         ).to(self.r2r_gpu)
-        self.r2r_norm = nn.LayerNorm(self.reduced_dim).to(self.r2r_gpu)
+        self.r2r_norm = nn.LayerNorm(self.reduced_dim).to(self.gpu0)
         self.r2r_ffn = nn.Linear(self.reduced_dim, self.reduced_dim).to(self.r2r_gpu)
 
 
@@ -533,7 +533,7 @@ class build_FourDNet(nn.Module):
             nn.Linear(self.reduced_dim, self.d2r_m * self.d2r_k),
             nn.Softmax(dim=-1)
         ).to(self.d2r_gpu)
-        self.d2r_norm = nn.LayerNorm(self.reduced_dim).to(self.d2r_gpu)
+        self.d2r_norm = nn.LayerNorm(self.reduced_dim).to(self.gpu1)
         self.d2r_ffn = nn.Linear(self.reduced_dim, self.reduced_dim).to(self.d2r_gpu)
 
 
@@ -549,7 +549,7 @@ class build_FourDNet(nn.Module):
             nn.Linear(self.reduced_dim, self.d2d_m * self.d2d_k),
             nn.Softmax(dim=-1)
         ).to(self.d2d_gpu)
-        self.d2d_norm = nn.LayerNorm(self.reduced_dim).to(self.d2d_gpu)
+        self.d2d_norm = nn.LayerNorm(self.reduced_dim).to(self.gpu1)
         self.d2d_ffn = nn.Linear(self.reduced_dim, self.reduced_dim).to(self.d2d_gpu)
 
 
@@ -564,6 +564,20 @@ class build_FourDNet(nn.Module):
         if self.visualize and osp.exists(f"vis"):
             shutil.rmtree(f"vis")
         self.dropout = False
+
+
+        # hypernet
+        self.hypernet_gpu = self.gpu0
+        self.hypernet = nn.Sequential(
+            nn.Conv2d(2 * self.reduced_dim, 128, 3, 1, 1),
+            nn.ReLU(),
+            nn.Conv2d(128, 32, 3, 1, 1),
+            nn.ReLU(),
+            nn.Conv2d(32, 8, 3, 1, 1),
+            nn.ReLU(),
+            nn.Conv2d(8, 2, 3, 1, 1),
+            nn.Softmax(dim=1)
+        ).to(self.hypernet_gpu)
 
 
     def forward(self, rgb, depth, label=None, cam_label= None, view_label=None):  # label is unused if self.cos_layer == 'no'
@@ -640,6 +654,17 @@ class build_FourDNet(nn.Module):
         local_cat_global_depth = self.merge_local_global_depth(local_cat_global_depth)
 
 
+        # the hypernet features
+        depth_feat_spatial = local_cat_global_depth.reshape(B, 16, 8, self.reduced_dim).permute(0, 3, 1, 2)
+        rgb_feat_spatial = local_cat_global_rgb.reshape(B, 16, 8, self.reduced_dim).permute(0, 3, 1, 2)
+        filters = self.hypernet(torch.cat((depth_feat_spatial.to(self.hypernet_gpu), rgb_feat_spatial.to(self.hypernet_gpu)), dim=1))
+        assert filters.shape == (B, 2, 16, 8)
+        rgb_filter = filters[:, 0, ...].to(self.gpu0)
+        depth_filter = filters[:, 1, ...].to(self.gpu1)
+        assert rgb_filter.shape == (B, 16, 8)
+        assert depth_filter.shape == (B, 16, 8)
+
+
         # defining the queries and values for both RGB and depth
         q_r = self.Q_r(local_cat_global_rgb.to(self.r2r_gpu))
         v_r = self.V_r(local_cat_global_rgb.to(self.r2r_gpu))
@@ -668,7 +693,7 @@ class build_FourDNet(nn.Module):
 
 
         # adding back to the RGB path
-        local_cat_global_rgb = local_cat_global_rgb + r2r_feat
+        local_cat_global_rgb = local_cat_global_rgb + r2r_feat.to(self.gpu0)
         local_cat_global_rgb = self.r2r_norm(local_cat_global_rgb)
 
 
@@ -693,7 +718,7 @@ class build_FourDNet(nn.Module):
 
 
         # adding back to the depth path
-        local_cat_global_depth = local_cat_global_depth + d2d_feat
+        local_cat_global_depth = local_cat_global_depth + d2d_feat.to(self.gpu1)
         local_cat_global_depth = self.d2d_norm(local_cat_global_depth)
 
 
@@ -718,7 +743,7 @@ class build_FourDNet(nn.Module):
 
 
         # adding back to the depth path
-        local_cat_global_depth = local_cat_global_depth + d2r_feat
+        local_cat_global_depth = local_cat_global_depth + d2r_feat.to(self.gpu1) * rgb_filter.reshape(B, 128).unsqueeze(-1).to(self.gpu1)
         local_cat_global_depth = self.d2r_norm(local_cat_global_depth)
 
 
@@ -743,19 +768,21 @@ class build_FourDNet(nn.Module):
 
 
         # adding back to the RGB path
-        local_cat_global_rgb = local_cat_global_rgb + r2d_feat
+        local_cat_global_rgb = local_cat_global_rgb + r2d_feat.to(self.gpu0) * depth_filter.reshape(B, 128).unsqueeze(-1).to(self.gpu0)
         local_cat_global_rgb = self.r2d_norm(local_cat_global_rgb)
 
 
         """Preparing final features to use for classification"""
-        # performing global average pooling
-        local_cat_global_rgb = torch.mean(local_cat_global_rgb, -2)
-        local_cat_global_depth = torch.mean(local_cat_global_depth, -2)
+        # # performing global average pooling
+        # local_cat_global_rgb = torch.mean(local_cat_global_rgb, -2)
+        # local_cat_global_depth = torch.mean(local_cat_global_depth, -2)
 
 
-        # final_embedding = local_cat_global_depth.to(self.target_gpu) + local_cat_global_rgb.to(self.target_gpu)
-        final_embedding = local_cat_global_rgb.to(self.target_gpu) 
+        final_embedding = local_cat_global_depth.to(self.target_gpu) * depth_filter.reshape(B, 128).unsqueeze(-1).to(self.target_gpu) + local_cat_global_rgb.to(self.target_gpu) * rgb_filter.reshape(B, 128).unsqueeze(-1).to(self.target_gpu)
+        # final_embedding = local_cat_global_rgb.to(self.target_gpu 
         # final_embedding = local_cat_global_depth.to(self.target_gpu) 
+
+        final_embedding = torch.mean(final_embedding, dim=-2)
 
 
         # compute the cls scores and return
