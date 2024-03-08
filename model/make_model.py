@@ -571,10 +571,10 @@ class build_FourDNet(nn.Module):
         depth = depth.float().to(self.gpu1)
 
 
+        B = rgb.shape[0]
         if self.training:
             with torch.no_grad():
                 # random modality dropout
-                B = rgb.shape[0]
                 p = torch.randint(0, 5, size=(B, ))
                 rgb_dropout_ids = ((p == 0) | (p == 2)).to(self.gpu0)
                 depth_dropout_ids = ((p == 1) | (p == 3)).to(self.gpu1)
