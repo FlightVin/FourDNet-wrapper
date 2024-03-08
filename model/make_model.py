@@ -534,7 +534,9 @@ class build_FourDNet(nn.Module):
         self.d2d_norm = nn.LayerNorm(self.reduced_dim).to(self.d2d_gpu)
 
 
+        # the final classifier
         self.classifier = nn.Linear(self.reduced_dim, num_classes).to(self.target_gpu)
+
 
         # development stage
         self.visualize = True
@@ -670,8 +672,6 @@ class build_FourDNet(nn.Module):
         local_cat_global_depth = self.d2d_norm(local_cat_global_depth)
 
 
-
-
         # """R2D Cross Attention"""
         # v_d = self.V_d(local_cat_global_depth.to(self.r2d_gpu))
         # # print(f"q.shape = {q.shape}")
@@ -731,7 +731,8 @@ class build_FourDNet(nn.Module):
 
 
         # final_embedding = local_cat_global_depth
-        final_embedding = local_cat_global_rgb 
+        # final_embedding = local_cat_global_rgb 
+        final_embedding = local_cat_global_depth 
         final_embedding = final_embedding.to(self.target_gpu)
 
 
