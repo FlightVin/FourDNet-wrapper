@@ -12,10 +12,10 @@ import wandb
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import shutil
-WANDB = False
+WANDB = True
 EMBEDDING_DIM = 128
 NUM_INSTANCES = 12
-EXPERIMENT_NAME = "Experiment6b" 
+EXPERIMENT_NAME = "Experiment7a" 
 PROJECT_NAME = "Experiments_Full"
 
 def do_train_4DNet(cfg,
