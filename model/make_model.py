@@ -563,7 +563,7 @@ class build_FourDNet(nn.Module):
         self.max_vis = 25
         if self.visualize and osp.exists(f"vis"):
             shutil.rmtree(f"vis")
-        self.dropout = False
+        self.dropout = True
 
 
         # hypernet
