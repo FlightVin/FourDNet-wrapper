@@ -13,6 +13,7 @@ import torch.distributed as dist
 from .occ_duke import OCC_DukeMTMCreID
 from .vehicleid import VehicleID
 from .procthor_depth import ProcThor_Depth
+from .realsense import RealSense
 from .procthor import ProcThor
 from .veri import VeRi
  
@@ -24,7 +25,8 @@ __factory = {
     # 'veri': VeRi,
     # 'VehicleID': VehicleID,
     # 'procthor': ProcThor,
-    "procthor_depth": ProcThor_Depth,
+    # "procthor_depth": ProcThor_Depth,
+    "realsense": RealSense,
 }
 
 

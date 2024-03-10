@@ -26,7 +26,8 @@ INPUT:
 
 DATASETS:
   # NAMES: ('market1501')
-  NAMES: ('procthor_depth')
+  # NAMES: ('procthor_depth')
+  NAMES: ('realsense')
   ROOT_DIR: ('./data')
   # ROOT_DIR: ('../../data')
 

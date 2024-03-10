@@ -100,8 +100,8 @@ class RGBD_Dataset(Dataset):
         # self.max_depth = 8.0
         # self.depth_mean = 3.45718
         # self.depth_std = 1.96257
-        self.max_depth = 9.0
-        self.min_depth = 1.0 
+        self.max_depth = 10.0
+        self.min_depth = 0.0 
         self.depth_mean = np.array([0.485, 0.456, 0.406])
         self.depth_std = np.array([0.229, 0.224, 0.225]) 
 
@@ -112,13 +112,15 @@ class RGBD_Dataset(Dataset):
     def __getitem__(self, index):
         img_path, pid, camid, trackid = self.dataset[index]
         img_name = img_path.split("/")[-1]
-        depth_path = osp.join(*(img_path.split("/")[:-1]), f"{img_name.split('.')[0]}.npy")
+        # depth_path = osp.join(*(img_path.split("/")[:-1]), f"{img_name.split('.')[0]}.npy")
+        depth_path = img_path.replace("rgb", "depth")
         # print(f"depth_path = {depth_path}") 
         assert os.path.exists(depth_path) 
 
 
         # loading the depth
-        depth = np.load(depth_path)
+        # depth = np.load(depth_path)
+        depth = cv2.imread(depth_path, cv2.IMREAD_GRAYSCALE)
         depth = cv2.resize(depth, (128, 256))
         depth = np.repeat(depth[None, :, :], 3, axis=0)
         depth = np.clip(depth, self.min_depth, self.max_depth)
