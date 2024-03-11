@@ -4,6 +4,7 @@ import time
 import torch
 import torch.nn as nn
 from utils.meter import AverageMeter
+from utils.metrics import confusion_matrix
 from utils.metrics import R1_mAP_eval
 from torch.cuda import amp
 import torch.distributed as dist
@@ -15,7 +16,7 @@ import shutil
 WANDB = True
 EMBEDDING_DIM = 128
 NUM_INSTANCES = 12
-EXPERIMENT_NAME = "Experiment7b" 
+EXPERIMENT_NAME = "Experiment8a" 
 PROJECT_NAME = "Experiments_Full"
 
 def do_train_4DNet(cfg,
@@ -45,7 +46,7 @@ def do_train_4DNet(cfg,
     os.mkdir(f"logs/{EXPERIMENT_NAME}")
     log_period = cfg.SOLVER.LOG_PERIOD
     checkpoint_period = cfg.SOLVER.CHECKPOINT_PERIOD
-    eval_period = cfg.SOLVER.EVAL_PERIOD
+    eval_period = 5  
 
     device = "cuda"
     epochs = cfg.SOLVER.MAX_EPOCHS
@@ -122,11 +123,13 @@ def do_train_4DNet(cfg,
                 torch.save(model.state_dict(),
                            os.path.join(f"logs/{EXPERIMENT_NAME}/{epoch}.pth"))
 
-        if epoch % 5 == 0:
+        if epoch % eval_period == 0:
             model.eval()
             batch_size = cfg.SOLVER.IMS_PER_BATCH
             embeddings = torch.empty((len(val_loader) * batch_size, EMBEDDING_DIM))
             count = 0
+            evaluator = R1_mAP_eval(num_query, max_rank=50, feat_norm=cfg.TEST.FEAT_NORM)
+            evaluator.reset()
             with torch.no_grad():
                 for n_iter, (img, depth, vid, target_cam, target_view) in enumerate(val_loader):
                     img = img.to(device)
@@ -137,21 +140,25 @@ def do_train_4DNet(cfg,
                     img = torch.zeros(img.shape)
                     feat = model(img, depth, target, cam_label=target_cam, view_label=target_view )
                     feat = feat.cpu()
+                    evaluator.update((feat, vid.cpu(), torch.tensor([0.0])))
                     # loss = loss_fn(score, feat, target, target_cam)
                     embeddings[n_iter * batch_size : n_iter * batch_size + img.shape[0]] = feat
                     count += img.shape[0]
+                cmc, mAP, _, _, _, _, _ = evaluator.compute() 
+                depth_mAP = mAP
                 embeddings = embeddings[:count]
                 # scores = F.cosine_similarity(embeddings.unsqueeze(0).repeat(count, 1, 1), embeddings.unsqueeze(1).repeat(1, count, 1))
 
-                print(f"computing the confusion matrix for depth-only case...")
-                scores = torch.zeros((count, count))
-                for i in tqdm(range(scores.shape[0])):
-                    for j in range(scores.shape[1]):
-                        scores[i][j] = embeddings[i] @ embeddings[j] / (torch.norm(embeddings[i]) * torch.norm(embeddings[j]))
-                positive_score = sum(torch.sum(scores[i : i + NUM_INSTANCES, i : i + NUM_INSTANCES]) for i in range(0, scores.shape[0], NUM_INSTANCES))
-                negative_score = torch.sum(scores) - positive_score
-                positive_score = positive_score / (count * count)
-                negative_score = negative_score / (count * count)
+                # print(f"computing the confusion matrix for depth-only case...")
+                # scores = torch.zeros((count, count))
+                # for i in tqdm(range(scores.shape[0])):
+                #     for j in range(scores.shape[1]):
+                #         scores[i][j] = embeddings[i] @ embeddings[j] / (torch.norm(embeddings[i]) * torch.norm(embeddings[j]))
+                # positive_score = sum(torch.sum(scores[i : i + NUM_INSTANCES, i : i + NUM_INSTANCES]) for i in range(0, scores.shape[0], NUM_INSTANCES))
+                # negative_score = torch.sum(scores) - positive_score
+                # positive_score = positive_score / (count * count)
+                # negative_score = negative_score / (count * count)
+                scores = confusion_matrix(embeddings, embeddings) 
                 plt.figure(figsize=(20, 20))
                 plt.imshow(scores, vmin=0.0, vmax=1.0)
                 plt.savefig(f"logs/{EXPERIMENT_NAME}/depth_{epoch}.jpg")
@@ -160,6 +167,8 @@ def do_train_4DNet(cfg,
             batch_size = cfg.SOLVER.IMS_PER_BATCH
             embeddings = torch.empty((len(val_loader) * batch_size, EMBEDDING_DIM))
             count = 0
+            evaluator = R1_mAP_eval(num_query, max_rank=50, feat_norm=cfg.TEST.FEAT_NORM)
+            evaluator.reset()
             with torch.no_grad():
                 for n_iter, (img, depth, vid, target_cam, target_view) in enumerate(val_loader):
                     img = img.to(device)
@@ -170,21 +179,26 @@ def do_train_4DNet(cfg,
                     depth = torch.zeros(depth.shape)
                     feat = model(img, depth, target, cam_label=target_cam, view_label=target_view )
                     feat = feat.cpu()
+                    evaluator.update((feat, vid.cpu(), torch.tensor([0.0])))
                     # loss = loss_fn(score, feat, target, target_cam)
                     embeddings[n_iter * batch_size : n_iter * batch_size + img.shape[0]] = feat
                     count += img.shape[0]
+
+                cmc, mAP, _, _, _, _, _ = evaluator.compute() 
+                rgb_mAP = mAP
                 embeddings = embeddings[:count]
                 # scores = F.cosine_similarity(embeddings.unsqueeze(0).repeat(count, 1, 1), embeddings.unsqueeze(1).repeat(1, count, 1))
 
-                print(f"computing the confusion matrix for rgb-only case...")
-                scores = torch.zeros((count, count))
-                for i in tqdm(range(scores.shape[0])):
-                    for j in range(scores.shape[1]):
-                        scores[i][j] = embeddings[i] @ embeddings[j] / (torch.norm(embeddings[i]) * torch.norm(embeddings[j]))
-                positive_score = sum(torch.sum(scores[i : i + NUM_INSTANCES, i : i + NUM_INSTANCES]) for i in range(0, scores.shape[0], NUM_INSTANCES))
-                negative_score = torch.sum(scores) - positive_score
-                positive_score = positive_score / (count * count)
-                negative_score = negative_score / (count * count)
+                # print(f"computing the confusion matrix for rgb-only case...")
+                # scores = torch.zeros((count, count))
+                # for i in tqdm(range(scores.shape[0])):
+                #     for j in range(scores.shape[1]):
+                #         scores[i][j] = embeddings[i] @ embeddings[j] / (torch.norm(embeddings[i]) * torch.norm(embeddings[j]))
+                # positive_score = sum(torch.sum(scores[i : i + NUM_INSTANCES, i : i + NUM_INSTANCES]) for i in range(0, scores.shape[0], NUM_INSTANCES))
+                # negative_score = torch.sum(scores) - positive_score
+                # positive_score = positive_score / (count * count)
+                # negative_score = negative_score / (count * count)
+                scores = confusion_matrix(embeddings, embeddings) 
                 plt.figure(figsize=(20, 20))
                 plt.imshow(scores, vmin=0.0, vmax=1.0)
                 plt.savefig(f"logs/{EXPERIMENT_NAME}/rgb_{epoch}.jpg")
@@ -192,6 +206,8 @@ def do_train_4DNet(cfg,
             batch_size = cfg.SOLVER.IMS_PER_BATCH
             embeddings = torch.empty((len(val_loader) * batch_size, EMBEDDING_DIM))
             count = 0
+            evaluator = R1_mAP_eval(num_query, max_rank=50, feat_norm=cfg.TEST.FEAT_NORM)
+            evaluator.reset()
             with torch.no_grad():
                 for n_iter, (img, depth, vid, target_cam, target_view) in enumerate(val_loader):
                     img = img.to(device)
@@ -201,21 +217,25 @@ def do_train_4DNet(cfg,
                     target_view = target_view.to(device)
                     feat = model(img, depth, target, cam_label=target_cam, view_label=target_view )
                     feat = feat.cpu()
+                    evaluator.update((feat, vid.cpu(), torch.tensor([0.0])))
                     # loss = loss_fn(score, feat, target, target_cam)
                     embeddings[n_iter * batch_size : n_iter * batch_size + img.shape[0]] = feat
                     count += img.shape[0]
+                cmc, mAP, _, _, _, _, _ = evaluator.compute() 
+                combined_mAP = mAP
                 embeddings = embeddings[:count]
                 # scores = F.cosine_similarity(embeddings.unsqueeze(0).repeat(count, 1, 1), embeddings.unsqueeze(1).repeat(1, count, 1))
 
-                print(f"computing the confusion matrix for the combined use case...")
-                scores = torch.zeros((count, count))
-                for i in tqdm(range(scores.shape[0])):
-                    for j in range(scores.shape[1]):
-                        scores[i][j] = embeddings[i] @ embeddings[j] / (torch.norm(embeddings[i]) * torch.norm(embeddings[j]))
-                positive_score = sum(torch.sum(scores[i : i + NUM_INSTANCES, i : i + NUM_INSTANCES]) for i in range(0, scores.shape[0], NUM_INSTANCES))
-                negative_score = torch.sum(scores) - positive_score
-                positive_score = positive_score / (count * count)
-                negative_score = negative_score / (count * count)
+                # print(f"computing the confusion matrix for the combined use case...")
+                # scores = torch.zeros((count, count))
+                # for i in tqdm(range(scores.shape[0])):
+                #     for j in range(scores.shape[1]):
+                #         scores[i][j] = embeddings[i] @ embeddings[j] / (torch.norm(embeddings[i]) * torch.norm(embeddings[j]))
+                # positive_score = sum(torch.sum(scores[i : i + NUM_INSTANCES, i : i + NUM_INSTANCES]) for i in range(0, scores.shape[0], NUM_INSTANCES))
+                # negative_score = torch.sum(scores) - positive_score
+                # positive_score = positive_score / (count * count)
+                # negative_score = negative_score / (count * count)
+                scores = confusion_matrix(embeddings, embeddings)
                 plt.figure(figsize=(20, 20))
                 plt.imshow(scores, vmin=0.0, vmax=1.0)
                 plt.savefig(f"logs/{EXPERIMENT_NAME}/rgb_depth_{epoch}.jpg")
@@ -228,11 +248,12 @@ def do_train_4DNet(cfg,
                         f"train_loss": loss_meter.avg,
                         f"lr": scheduler._get_lr(epoch)[0],
                         f"epoch": epoch,
-                        f"positive_score": positive_score,
-                        f"negative_score": negative_score,
                         f"depth_confusion_matrix": wandb.Image(f"logs/{EXPERIMENT_NAME}/depth_{epoch}.jpg"),
                         f"rgb_confusion_matrix": wandb.Image(f"logs/{EXPERIMENT_NAME}/rgb_{epoch}.jpg"),
                         f"combined_confusion_matrix": wandb.Image(f"logs/{EXPERIMENT_NAME}/rgb_depth_{epoch}.jpg"),
+                        f"depth_mAP": depth_mAP,
+                        f"rgb_mAP": rgb_mAP,
+                        f"combined_mAP": combined_mAP,
                     })
             torch.cuda.empty_cache()
 

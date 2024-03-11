@@ -137,7 +137,7 @@ def make_dataloader_depth(cfg):
             )
         )
 
-    val_set = RGBD_Dataset(dataset.query, val_transforms, depth_transforms)
+    val_set = RGBD_Dataset(dataset.query + dataset.gallery, val_transforms, depth_transforms)
 
     val_loader = DataLoader(
         val_set,
