@@ -435,8 +435,8 @@ class build_FourDNet(nn.Module):
 
 
         # the pretrained modalities 
-        self.rgb_pretrained_path = "./logs/Experiment9a_rgbonly/120.pth"
-        self.depth_pretrained_path = "./logs/Experiment9a_depthonly/120.pth"
+        self.rgb_pretrained_path = "rgb.pth"
+        self.depth_pretrained_path = "depth.pth"
         
 
         print(f"using model parallel with GPU0 = {self.gpu0}, GPU1 = {self.gpu1} and TARGET_GPU = {self.target_gpu}")
@@ -588,7 +588,7 @@ class build_FourDNet(nn.Module):
 
         # loading the pretrained modalities
         self.load_rgb_pretrained()
-        # self.load_depth_pretrained()
+        self.load_depth_pretrained()
 
 
     def load_rgb_pretrained(self):
@@ -1023,4 +1023,3 @@ def make_model(cfg, num_class, camera_num, view_num, gpu0, gpu1, target_gpu):
     # model = build_DepthNet3(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     # model = build_transformer_local(num_class, camera_num, view_num, cfg, __factory_T_type, rearrange=cfg.MODEL.RE_ARRANGE)
     return model
-
