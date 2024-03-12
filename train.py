@@ -44,7 +44,7 @@ if __name__ == '__main__':
     cfg.merge_from_list(args.opts)
     cfg.freeze()
 
-    set_seed(cfg.SOLVER.SEED)
+    # set_seed(cfg.SOLVER.SEED)
 
     if cfg.MODEL.DIST_TRAIN:
         torch.cuda.set_device(args.local_rank)
