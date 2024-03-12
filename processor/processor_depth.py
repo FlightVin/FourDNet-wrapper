@@ -16,7 +16,7 @@ import shutil
 WANDB = True
 EMBEDDING_DIM = 128
 NUM_INSTANCES = 12
-EXPERIMENT_NAME = "Experiment11_full"
+EXPERIMENT_NAME = "Experiment12_rgb_4"
 PROJECT_NAME = "Experiments_Full2"
 
 def do_train_4DNet(cfg,
@@ -45,7 +45,7 @@ def do_train_4DNet(cfg,
         shutil.rmtree(f"logs/{EXPERIMENT_NAME}")
     os.mkdir(f"logs/{EXPERIMENT_NAME}")
     log_period = cfg.SOLVER.LOG_PERIOD
-    checkpoint_period = cfg.SOLVER.CHECKPOINT_PERIOD
+    checkpoint_period = 10 
     eval_period = 5  
 
     device = "cuda"
