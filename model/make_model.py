@@ -697,29 +697,29 @@ class build_FourDNet(nn.Module):
         local_cat_global_rgb = self.r2r_norm(local_cat_global_rgb)
 
 
-        """D2D Self Attention"""
-        # selecting key positions and their attention weights
-        selector_outputs = self.d2d_selector(q_d)
-        attention_scores = self.d2d_attn_weights(q_d)
-        locations_x = selector_outputs[:, :, : self.d2d_m * self.d2d_k]
-        locations_y = selector_outputs[:, :, self.d2d_m * self.d2d_k :] 
+        # """D2D Self Attention"""
+        # # selecting key positions and their attention weights
+        # selector_outputs = self.d2d_selector(q_d)
+        # attention_scores = self.d2d_attn_weights(q_d)
+        # locations_x = selector_outputs[:, :, : self.d2d_m * self.d2d_k]
+        # locations_y = selector_outputs[:, :, self.d2d_m * self.d2d_k :] 
 
 
-        # performing sampling of the value feature map at the given locations
-        v = v_d.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
-        grid = torch.stack((locations_x, locations_y), -1)
-        grid = grid * 2 - 1
-        interpolated_feat = F.grid_sample(v, grid, align_corners=True).permute(0, 2, 3, 1)
+        # # performing sampling of the value feature map at the given locations
+        # v = v_d.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
+        # grid = torch.stack((locations_x, locations_y), -1)
+        # grid = grid * 2 - 1
+        # interpolated_feat = F.grid_sample(v, grid, align_corners=True).permute(0, 2, 3, 1)
 
 
-        # performing weighted sum of values
-        d2d_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
-        d2d_feat = self.d2d_ffn(d2d_feat)
+        # # performing weighted sum of values
+        # d2d_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
+        # d2d_feat = self.d2d_ffn(d2d_feat)
 
 
-        # adding back to the depth path
-        local_cat_global_depth = local_cat_global_depth + d2d_feat.to(self.gpu1)
-        local_cat_global_depth = self.d2d_norm(local_cat_global_depth)
+        # # adding back to the depth path
+        # local_cat_global_depth = local_cat_global_depth + d2d_feat.to(self.gpu1)
+        # local_cat_global_depth = self.d2d_norm(local_cat_global_depth)
 
 
         # """D2R Cross Attention"""
@@ -778,8 +778,8 @@ class build_FourDNet(nn.Module):
         # local_cat_global_depth = torch.mean(local_cat_global_depth, -2)
 
 
-        final_embedding = local_cat_global_depth.to(self.target_gpu) * depth_filter.reshape(B, 128).unsqueeze(-1).to(self.target_gpu) + local_cat_global_rgb.to(self.target_gpu) * rgb_filter.reshape(B, 128).unsqueeze(-1).to(self.target_gpu)
-        # final_embedding = local_cat_global_rgb.to(self.target_gpu) 
+        # final_embedding = local_cat_global_depth.to(self.target_gpu) * depth_filter.reshape(B, 128).unsqueeze(-1).to(self.target_gpu) + local_cat_global_rgb.to(self.target_gpu) * rgb_filter.reshape(B, 128).unsqueeze(-1).to(self.target_gpu)
+        final_embedding = local_cat_global_rgb.to(self.target_gpu) 
         # final_embedding = local_cat_global_depth.to(self.target_gpu) 
 
         final_embedding = torch.mean(final_embedding, dim=-2)
