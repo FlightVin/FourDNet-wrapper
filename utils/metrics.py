@@ -12,6 +12,7 @@ def euclidean_distance(qf, gf):
     dist_mat.addmm_(1, -2, qf, gf.t())
     return dist_mat.cpu().numpy()
 
+
 def cosine_similarity(qf, gf):
     epsilon = 0.00001
     dist_mat = qf.mm(gf.t())
