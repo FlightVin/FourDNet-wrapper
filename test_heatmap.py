@@ -36,7 +36,7 @@ if __name__ == "__main__":
 
     os.environ["CUDA_VISIBLE_DEVICES"] = cfg.MODEL.DEVICE_ID
 
-    model = make_model(cfg, num_class=NUM_CLASSES, camera_num=1, view_num=1, gpu0=0, gpu1=0, target_gpu=0)
+    model = make_model(cfg, num_class=69, camera_num=1, view_num=1, gpu0=0, gpu1=0, target_gpu=0)
     model.load_param(cfg.TEST.WEIGHT)
 
     val_transforms = T.Compose(
