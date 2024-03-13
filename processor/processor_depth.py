@@ -16,7 +16,7 @@ import shutil
 WANDB = True
 EMBEDDING_DIM = 128
 NUM_INSTANCES = 12
-EXPERIMENT_NAME = "Experiment1_rgb_1"
+EXPERIMENT_NAME = "Experiment1_depth_1"
 PROJECT_NAME = "procthor_final"
 
 def do_train_4DNet(cfg,
