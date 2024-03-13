@@ -20,8 +20,8 @@ import torch.nn.functional as F
 import pickle
 
 
-NUM_CLASSES = 70
-NUM_INSTANCES = 5 
+NUM_CLASSES = 69
+NUM_VIEWS = 5 
 
 if __name__ == "__main__":
     cfg.merge_from_file("config.yml")
@@ -51,12 +51,19 @@ if __name__ == "__main__":
     test_path = "./data/procthor_final/val"
     test_classes = []
     for classname in os.listdir(test_path):
-        test_classes.append(osp.join(test_path, classname))
+        test_classes.append(classname)
 
 
     test_images = [os.listdir(os.path.join(test_path, c)) for c in test_classes]
+    
+    model_inputs = []
     for class_idx, classname in enumerate(test_classes):
-        for img_idx, img in test_images:
+        model_inputs.append([])
+        for img_idx, img in enumerate(test_images[class_idx]):
+            if img.find(".npy") != -1:
+                # if it is a depth image, we do not take it here, it would be taken along with it's rgb counterpart
+                continue
+
             img_name = test_images[class_idx][img_idx]
             rgb_path = osp.join(test_path, classname, img)
             depth_path = osp.join(test_path, classname, img.split(".")[0] + ".npy")
@@ -75,20 +82,21 @@ if __name__ == "__main__":
             depth = depth / 0.5 
             depth = torch.tensor(depth)
 
-            test_images[class_idx][img_idx] = (rgb, depth)
+            model_inputs[-1].append((rgb, depth))
 
+
+    assert len(model_inputs) == NUM_CLASSES
+    assert len(model_inputs[0]) == NUM_VIEWS
 
     model.eval()
     w = []
     with torch.no_grad():
-        with tqdm(total=len(test_images) * len(test_images[0])) as bar:
-            for row in test_images:
+        with tqdm(NUM_CLASSES * NUM_VIEWS) as bar:
+            for ctg in model_inputs:
                 r = []
-                for i in row:
-                    # im = test_transforms(i.convert("RGB"))
-                    im = val_transforms(i)
+                for rgb, depth in ctg:
                     with torch.no_grad():
-                        k = model(im.unsqueeze(0))
+                        k = model(rgb.unsqueeze(0), depth.unsqueeze(0))
                     r.append(k)
                     bar.update(1)
                 w.append(torch.stack(r))
@@ -105,7 +113,7 @@ if __name__ == "__main__":
     plt.imshow(scores, cmap="hot")
     plt.colorbar()
 
-    num_instances = NUM_INSTANCES
+    num_instances = NUM_VIEWS
 
     x_axis_titles = [
         f"{test_classes[i//num_instances]}"
@@ -140,5 +148,5 @@ if __name__ == "__main__":
             plt.axhline(y=i - 0.5, color="blue", linestyle="-", linewidth=0.5)
 
     # Show the heatmap
-    plt.title("Trans-ReID")
+    plt.title("FourDNet")
     plt.savefig("heatmap.jpg")

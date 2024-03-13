@@ -564,7 +564,7 @@ class build_FourDNet(nn.Module):
 
 
         # development stage
-        self.visualize = True
+        self.visualize = False
         self.vis_count = 0
         self.max_vis = 25
         if self.visualize and osp.exists(f"vis"):
@@ -587,8 +587,8 @@ class build_FourDNet(nn.Module):
 
 
         # loading the pretrained modalities
-        self.load_rgb_pretrained()
-        self.load_depth_pretrained()
+        # self.load_rgb_pretrained()
+        # self.load_depth_pretrained()
 
 
     def load_rgb_pretrained(self):
@@ -609,6 +609,20 @@ class build_FourDNet(nn.Module):
                 self.state_dict()[i].copy_(param_dict[i])
             elif i.find("depth") != -1 or i.find("d2d") != -1 or i.find("Q_d") != -1 or i.find("V_d") != -1:
                 self.state_dict()[i].copy_(param_dict[i])
+
+
+    def load_param(self, trained_path):
+        param_dict = torch.load(trained_path, map_location=f"cuda:0")
+        for i in param_dict:
+            self.state_dict()[i.replace('module.', '')].copy_(param_dict[i])
+        print('Loading pretrained model from {}'.format(trained_path))
+
+
+    def load_param_finetune(self, model_path):
+        param_dict = torch.load(model_path, map_location=f"cuda:0")
+        for i in param_dict:
+            self.state_dict()[i].copy_(param_dict[i])
+        print('Loading pretrained model for finetuning from {}'.format(model_path))
 
 
 
