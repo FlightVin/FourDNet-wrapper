@@ -17,7 +17,7 @@ WANDB = True
 EMBEDDING_DIM = 128
 NUM_INSTANCES = 12
 EXPERIMENT_NAME = "Experiment1_rgb_1"
-PROJECT_NAME = "realsense_all_18_light_mixed"
+PROJECT_NAME = "procthor_final"
 
 def do_train_4DNet(cfg,
              model,
