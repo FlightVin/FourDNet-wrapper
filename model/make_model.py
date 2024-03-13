@@ -435,8 +435,8 @@ class build_FourDNet(nn.Module):
 
 
         # the pretrained modalities 
-        self.rgb_pretrained_path = "./logs/Experiment9a_rgbonly/120.pth"
-        self.depth_pretrained_path = "./logs/Experiment11_depthonly/120.pth"
+        self.rgb_pretrained_path = "./procthor_final_rgb.pth"
+        self.depth_pretrained_path = "./procthor_final_depth.pth"
         
 
         print(f"using model parallel with GPU0 = {self.gpu0}, GPU1 = {self.gpu1} and TARGET_GPU = {self.target_gpu}")
@@ -569,7 +569,7 @@ class build_FourDNet(nn.Module):
         self.max_vis = 25
         if self.visualize and osp.exists(f"vis"):
             shutil.rmtree(f"vis")
-        self.dropout = False
+        self.dropout = True
 
 
         # hypernet
@@ -587,12 +587,12 @@ class build_FourDNet(nn.Module):
 
 
         # loading the pretrained modalities
-        # self.load_rgb_pretrained()
-        # self.load_depth_pretrained()
+        self.load_rgb_pretrained()
+        self.load_depth_pretrained()
 
 
     def load_rgb_pretrained(self):
-        param_dict = torch.load(self.rgb_pretrained_path)
+        param_dict = torch.load(self.rgb_pretrained_path, map_location=f"cuda:{self.gpu0}")
         for i in param_dict:
             if i.find("base2") != -1:
                 continue
@@ -603,7 +603,7 @@ class build_FourDNet(nn.Module):
 
 
     def load_depth_pretrained(self):
-        param_dict = torch.load(self.depth_pretrained_path)
+        param_dict = torch.load(self.depth_pretrained_path, map_location=f"cuda:{self.gpu1}")
         for i in param_dict:
             if i.find("base2") != -1:
                 self.state_dict()[i].copy_(param_dict[i])
@@ -704,29 +704,29 @@ class build_FourDNet(nn.Module):
         v_d = self.V_d(local_cat_global_depth.to(self.d2d_gpu))
 
 
-        # """R2R Self Attention"""
-        # # selecting key positions and their attention weights
-        # selector_outputs = self.r2r_selector(q_r)
-        # attention_scores = self.r2r_attn_weights(q_r)
-        # locations_x = selector_outputs[:, :, 0 : self.r2r_m * self.r2r_k]
-        # locations_y = selector_outputs[:, :, self.r2r_m * self.r2r_k :] 
+        """R2R Self Attention"""
+        # selecting key positions and their attention weights
+        selector_outputs = self.r2r_selector(q_r)
+        attention_scores = self.r2r_attn_weights(q_r)
+        locations_x = selector_outputs[:, :, 0 : self.r2r_m * self.r2r_k]
+        locations_y = selector_outputs[:, :, self.r2r_m * self.r2r_k :] 
 
 
-        # # performing sampling of the value feature map at the given locations
-        # v = v_r.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
-        # grid = torch.stack((locations_x, locations_y), -1)
-        # grid = grid * 2 - 1
-        # interpolated_feat = F.grid_sample(v, grid, align_corners=True).permute(0, 2, 3, 1)
+        # performing sampling of the value feature map at the given locations
+        v = v_r.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
+        grid = torch.stack((locations_x, locations_y), -1)
+        grid = grid * 2 - 1
+        interpolated_feat = F.grid_sample(v, grid, align_corners=True).permute(0, 2, 3, 1)
 
 
-        # # performing weighted sum of values
-        # r2r_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
-        # r2r_feat = self.r2r_ffn(r2r_feat)
+        # performing weighted sum of values
+        r2r_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
+        r2r_feat = self.r2r_ffn(r2r_feat)
 
 
-        # # adding back to the RGB path
-        # local_cat_global_rgb = local_cat_global_rgb + r2r_feat.to(self.gpu0)
-        # local_cat_global_rgb = self.r2r_norm(local_cat_global_rgb)
+        # adding back to the RGB path
+        local_cat_global_rgb = local_cat_global_rgb + r2r_feat.to(self.gpu0)
+        local_cat_global_rgb = self.r2r_norm(local_cat_global_rgb)
 
 
         """D2D Self Attention"""
@@ -754,54 +754,54 @@ class build_FourDNet(nn.Module):
         local_cat_global_depth = self.d2d_norm(local_cat_global_depth)
 
 
-        # """D2R Cross Attention"""
-        # # selecting key positions and their attention weights
-        # selector_outputs = self.d2r_selector(q_d.to(self.d2r_gpu))
-        # attention_scores = self.d2r_attn_weights(q_d.to(self.d2r_gpu))
-        # locations_x = selector_outputs[:, :, 0 : self.d2r_m * self.d2r_k]
-        # locations_y = selector_outputs[:, :, self.d2r_m * self.d2r_k :] 
+        """D2R Cross Attention"""
+        # selecting key positions and their attention weights
+        selector_outputs = self.d2r_selector(q_d.to(self.d2r_gpu))
+        attention_scores = self.d2r_attn_weights(q_d.to(self.d2r_gpu))
+        locations_x = selector_outputs[:, :, 0 : self.d2r_m * self.d2r_k]
+        locations_y = selector_outputs[:, :, self.d2r_m * self.d2r_k :] 
 
 
-        # # performing sampling of the value feature map at the given locations
-        # v = v_r.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
-        # grid = torch.stack((locations_x, locations_y), -1)
-        # grid = grid * 2 - 1
-        # interpolated_feat = F.grid_sample(v.to(self.d2r_gpu), grid, align_corners=True).permute(0, 2, 3, 1)
+        # performing sampling of the value feature map at the given locations
+        v = v_r.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
+        grid = torch.stack((locations_x, locations_y), -1)
+        grid = grid * 2 - 1
+        interpolated_feat = F.grid_sample(v.to(self.d2r_gpu), grid, align_corners=True).permute(0, 2, 3, 1)
 
 
-        # # performing weighted sum of values
-        # d2r_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
-        # d2r_feat = self.d2r_ffn(d2r_feat)
+        # performing weighted sum of values
+        d2r_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
+        d2r_feat = self.d2r_ffn(d2r_feat)
 
 
-        # # adding back to the depth path
-        # local_cat_global_depth = local_cat_global_depth + d2r_feat.to(self.gpu1) * rgb_filter.reshape(B, 128).unsqueeze(-1).to(self.gpu1)
-        # local_cat_global_depth = self.d2r_norm(local_cat_global_depth)
+        # adding back to the depth path
+        local_cat_global_depth = local_cat_global_depth + d2r_feat.to(self.gpu1) * rgb_filter.reshape(B, 128).unsqueeze(-1).to(self.gpu1)
+        local_cat_global_depth = self.d2r_norm(local_cat_global_depth)
 
 
-        # """R2D Cross Attention"""
-        # # selecting key positions and their attention weights
-        # selector_outputs = self.r2d_selector(q_r.to(self.r2d_gpu))
-        # attention_scores = self.r2d_attn_weights(q_r.to(self.r2d_gpu))
-        # locations_x = selector_outputs[:, :, 0 : self.r2d_m * self.r2d_k]
-        # locations_y = selector_outputs[:, :, self.r2d_m * self.r2d_k :] 
+        """R2D Cross Attention"""
+        # selecting key positions and their attention weights
+        selector_outputs = self.r2d_selector(q_r.to(self.r2d_gpu))
+        attention_scores = self.r2d_attn_weights(q_r.to(self.r2d_gpu))
+        locations_x = selector_outputs[:, :, 0 : self.r2d_m * self.r2d_k]
+        locations_y = selector_outputs[:, :, self.r2d_m * self.r2d_k :] 
 
 
-        # # performing sampling of the value feature map at the given locations
-        # v = v_d.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
-        # grid = torch.stack((locations_x, locations_y), -1)
-        # grid = grid * 2 - 1
-        # interpolated_feat = F.grid_sample(v.to(self.r2d_gpu), grid, align_corners=True).permute(0, 2, 3, 1)
+        # performing sampling of the value feature map at the given locations
+        v = v_d.permute(0, 2, 1).reshape(B, self.reduced_dim, 16, 8)
+        grid = torch.stack((locations_x, locations_y), -1)
+        grid = grid * 2 - 1
+        interpolated_feat = F.grid_sample(v.to(self.r2d_gpu), grid, align_corners=True).permute(0, 2, 3, 1)
 
 
-        # # performing weighted sum of values
-        # r2d_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
-        # r2d_feat = self.r2d_ffn(r2d_feat)
+        # performing weighted sum of values
+        r2d_feat = torch.sum(interpolated_feat * attention_scores.unsqueeze(-1), dim=-2) 
+        r2d_feat = self.r2d_ffn(r2d_feat)
 
 
-        # # adding back to the RGB path
-        # local_cat_global_rgb = local_cat_global_rgb + r2d_feat.to(self.gpu0) * depth_filter.reshape(B, 128).unsqueeze(-1).to(self.gpu0)
-        # local_cat_global_rgb = self.r2d_norm(local_cat_global_rgb)
+        # adding back to the RGB path
+        local_cat_global_rgb = local_cat_global_rgb + r2d_feat.to(self.gpu0) * depth_filter.reshape(B, 128).unsqueeze(-1).to(self.gpu0)
+        local_cat_global_rgb = self.r2d_norm(local_cat_global_rgb)
 
 
         """Preparing final features to use for classification"""
@@ -810,9 +810,9 @@ class build_FourDNet(nn.Module):
         # local_cat_global_depth = torch.mean(local_cat_global_depth, -2)
 
  
-        # final_embedding = local_cat_global_depth.to(self.target_gpu) * depth_filter.reshape(B, 128).unsqueeze(-1).to(self.target_gpu) + local_cat_global_rgb.to(self.target_gpu) * rgb_filter.reshape(B, 128).unsqueeze(-1).to(self.target_gpu)
+        final_embedding = local_cat_global_depth.to(self.target_gpu) * depth_filter.reshape(B, 128).unsqueeze(-1).to(self.target_gpu) + local_cat_global_rgb.to(self.target_gpu) * rgb_filter.reshape(B, 128).unsqueeze(-1).to(self.target_gpu)
         # final_embedding = local_cat_global_rgb.to(self.target_gpu) 
-        final_embedding = local_cat_global_depth.to(self.target_gpu) 
+        # final_embedding = local_cat_global_depth.to(self.target_gpu) 
         final_embedding = torch.mean(final_embedding, dim=-2)
 
         # compute the cls scores and return

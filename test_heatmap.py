@@ -20,10 +20,13 @@ import torch.nn.functional as F
 import pickle
 
 
+NUM_CLASSES = 70
+NUM_INSTANCES = 5 
+
 if __name__ == "__main__":
     cfg.merge_from_file("config.yml")
     cfg.MODEL.DEVICE_ID = "0"
-    cfg.TEST.WEIGHT = "./transformer_120.pth"
+    cfg.TEST.WEIGHT = "./procthor_final.pth"
     cfg.freeze()
     print(cfg)
 
@@ -33,7 +36,7 @@ if __name__ == "__main__":
 
     os.environ["CUDA_VISIBLE_DEVICES"] = cfg.MODEL.DEVICE_ID
 
-    model = make_model(cfg, num_class=241, camera_num=1, view_num=1)
+    model = make_model(cfg, num_class=NUM_CLASSES, camera_num=1, view_num=1, gpu0=0, gpu1=0, target_gpu=0)
     model.load_param(cfg.TEST.WEIGHT)
 
     val_transforms = T.Compose(
@@ -45,25 +48,36 @@ if __name__ == "__main__":
         ]
     )
 
-    test_path = "./procthor_test/"
+    test_path = "./data/procthor_final/val"
     test_classes = []
-    for coarse in os.listdir(test_path):
-        for fine in os.listdir(osp.join(test_path, coarse)):
-            test_classes.append(osp.join(coarse, fine))
+    for classname in os.listdir(test_path):
+        test_classes.append(osp.join(test_path, classname))
+
 
     test_images = [os.listdir(os.path.join(test_path, c)) for c in test_classes]
+    for class_idx, classname in enumerate(test_classes):
+        for img_idx, img in test_images:
+            img_name = test_images[class_idx][img_idx]
+            rgb_path = osp.join(test_path, classname, img)
+            depth_path = osp.join(test_path, classname, img.split(".")[0] + ".npy")
 
-    for i in range(len(test_classes)):
-        for j in range(len(test_images[i])):
-            test_images[i][j] = os.path.join(
-                test_path, test_classes[i], test_images[i][j]
-            )
+            # reading RGB image and applying transforms
+            rgb = Image.open(rgb_path)
+            rgb = val_transforms(rgb)
 
-    for i in range(len(test_classes)):
-        for j in range(len(test_images[i])):
-            test_images[i][j] = cv2.imread(test_images[i][j])
-            test_images[i][j] = cv2.cvtColor(test_images[i][j], cv2.COLOR_BGR2RGB)
-    #
+            # reading depth image and applying transforms
+            depth = np.load(depth_path)
+            depth = cv2.resize(depth, (128, 256))
+            depth = np.repeat(depth[None, :, :], 3, axis=0)
+            depth = np.clip(depth, 0.0, 10.0) 
+            depth = depth / (10.0)
+            depth = depth - 0.5 
+            depth = depth / 0.5 
+            depth = torch.tensor(depth)
+
+            test_images[class_idx][img_idx] = (rgb, depth)
+
+
     model.eval()
     w = []
     with torch.no_grad():
@@ -81,13 +95,6 @@ if __name__ == "__main__":
     w = torch.stack(w)
     w = w.reshape((-1, w.shape[-1]))
 
-    # with open(f"w.pkl", "wb") as f:
-    #     pickle.dump(w, f)
-
-    # with open(f"w.pkl", "rb") as f:
-    #     w = pickle.load(f)
-
-
     scores = torch.zeros((w.shape[0], w.shape[0])).cpu().numpy()
     for i in range(scores.shape[0]):
         for j in range(scores.shape[1]):
@@ -98,7 +105,7 @@ if __name__ == "__main__":
     plt.imshow(scores, cmap="hot")
     plt.colorbar()
 
-    num_instances = 6
+    num_instances = NUM_INSTANCES
 
     x_axis_titles = [
         f"{test_classes[i//num_instances]}"
