@@ -22,7 +22,7 @@ class RealSense(BaseImageDataset):
     # images: 12936 (train) + 3368 (query) + 15913 (gallery)
     """
 
-    dataset_dir = "realsense_combined_18_mixed_mixed"
+    dataset_dir = "realsense_rrc_cleaned_18_mixed_mixed"
 
     def __init__(self, root="", verbose=True, pid_begin=0, **kwargs):
         super().__init__()

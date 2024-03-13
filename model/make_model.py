@@ -564,7 +564,7 @@ class build_FourDNet(nn.Module):
 
 
         # development stage
-        self.visualize = True
+        self.visualize = False
         self.vis_count = 0
         self.max_vis = 25
         if self.visualize and osp.exists(f"vis"):
