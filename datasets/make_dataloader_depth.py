@@ -25,8 +25,8 @@ __factory = {
     # 'veri': VeRi,
     # 'VehicleID': VehicleID,
     # 'procthor': ProcThor,
-    # "procthor_depth": ProcThor_Depth,
-    "realsense": RealSense,
+    "procthor_depth": ProcThor_Depth,
+    # "realsense": RealSense,
 }
 
 
