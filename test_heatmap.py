@@ -29,29 +29,27 @@ class LocalArgs:
     """
     Class to hold local configuration arguments.
     """
-    config_file: str = "config.yml"
-    model: str = "./procthor_final.pth"
+    reid_config_file: str = "config.yml"
+    reid_model: str = "/scratch/vineeth.bhat/FourDNet/procthor_final.pth"
+    reid_num_classes: int = 69
     test_folder: str = "/scratch/vineeth.bhat/FourDNet/data/procthor_final/val"
+    reid_model_pretrain_path: str = "/scratch/vineeth.bhat/FourDNet/checkpoints/jx_vit_base_p16_224-80ecf9dd.pth"
 
-if __name__ == "__main__":
-    largs = tyro.cli(LocalArgs, description=__doc__)
-    print(largs)
-
-    cfg.merge_from_file(largs.config_file)
+def load_reid_model(largs):
+    cfg.merge_from_file(largs.reid_config_file)
     cfg.MODEL.DEVICE_ID = "0"
-    cfg.TEST.WEIGHT = largs.model
+    cfg.TEST.WEIGHT = largs.reid_model
+    cfg.MODEL.PRETRAIN_PATH = largs.reid_model_pretrain_path
     cfg.freeze()
-    print(cfg)
-
-    output_dir = cfg.OUTPUT_DIR
-    if output_dir and not os.path.exists(output_dir):
-        os.makedirs(output_dir)
 
     os.environ["CUDA_VISIBLE_DEVICES"] = cfg.MODEL.DEVICE_ID
 
-    model = make_model(cfg, num_class=69, camera_num=1, view_num=1, gpu0=0, gpu1=0, target_gpu=0)
+    model = make_model(cfg, num_class=largs.reid_num_classes, camera_num=1, view_num=1, gpu0=0, gpu1=0, target_gpu=0)
     model.load_param(cfg.TEST.WEIGHT)
 
+    return model
+
+def get_reid_emb(model, rgb_path, depth_path):
     val_transforms = T.Compose(
         [
             T.ToPILImage(),
@@ -60,6 +58,36 @@ if __name__ == "__main__":
             T.Normalize(mean=cfg.INPUT.PIXEL_MEAN, std=cfg.INPUT.PIXEL_STD),
         ]
     )
+
+    # reading RGB image and applying transforms
+    rgb = Image.open(rgb_path)
+    rgb = val_transforms(rgb)
+
+    # reading depth image and applying transforms
+    depth = np.load(depth_path)
+    depth = cv2.resize(depth, (128, 256))
+    depth = np.repeat(depth[None, :, :], 3, axis=0)
+    depth = np.clip(depth, 0.0, 10.0) 
+    depth = depth / (10.0)
+    depth = depth - 0.5 
+    depth = depth / 0.5 
+    depth = torch.tensor(depth)
+
+    with torch.no_grad():
+        k = model(rgb.unsqueeze(0), depth.unsqueeze(0))
+
+    return k
+
+
+if __name__ == "__main__":
+    largs = tyro.cli(LocalArgs, description=__doc__)
+    print(largs)
+
+    model = load_reid_model(largs)
+
+    output_dir = cfg.OUTPUT_DIR
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
     test_path = largs.test_folder
     test_classes = []
@@ -81,21 +109,7 @@ if __name__ == "__main__":
             rgb_path = osp.join(test_path, classname, img)
             depth_path = osp.join(test_path, classname, img.split(".")[0] + ".npy")
 
-            # reading RGB image and applying transforms
-            rgb = Image.open(rgb_path)
-            rgb = val_transforms(rgb)
-
-            # reading depth image and applying transforms
-            depth = np.load(depth_path)
-            depth = cv2.resize(depth, (128, 256))
-            depth = np.repeat(depth[None, :, :], 3, axis=0)
-            depth = np.clip(depth, 0.0, 10.0) 
-            depth = depth / (10.0)
-            depth = depth - 0.5 
-            depth = depth / 0.5 
-            depth = torch.tensor(depth)
-
-            model_inputs[-1].append((rgb, depth))
+            model_inputs[-1].append((rgb_path, depth_path))
 
 
     assert len(model_inputs) == NUM_CLASSES
@@ -109,8 +123,7 @@ if __name__ == "__main__":
             for ctg in model_inputs:
                 r = []
                 for rgb, depth in ctg:
-                    with torch.no_grad():
-                        k = model(rgb.unsqueeze(0), depth.unsqueeze(0))
+                    k = get_reid_emb(model, rgb, depth)
                     r.append(k)
                     bar.update(1)
                 w.append(torch.stack(r))
