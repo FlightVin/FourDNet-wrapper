@@ -2,10 +2,10 @@ import os
 import torch
 from config import cfg
 import argparse
-from datasets import make_dataloader
+# from datasets import make_dataloader
 from model import make_model
-from processor import do_inference
-from utils.logger import setup_logger
+# from processor import do_inference
+# from utils.logger import setup_logger
 import matplotlib.pyplot as plt
 import PIL
 from PIL import Image
