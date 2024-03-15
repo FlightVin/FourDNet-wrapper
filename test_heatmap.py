@@ -78,6 +78,35 @@ def get_reid_emb(model, rgb_path, depth_path):
 
     return k
 
+def get_reid_emb_new(model, rgb, depth):
+    val_transforms = T.Compose(
+        [
+            T.ToPILImage(),
+            T.Resize(cfg.INPUT.SIZE_TEST),
+            T.ToTensor(),
+            T.Normalize(mean=cfg.INPUT.PIXEL_MEAN, std=cfg.INPUT.PIXEL_STD),
+        ]
+    )
+
+    # reading RGB image and applying transforms
+    # rgb = Image.open(rgb_path)
+    rgb = val_transforms(rgb)
+
+    # reading depth image and applying transforms
+    # depth = np.load(depth_path)
+    depth = cv2.resize(depth, (128, 256))
+    depth = np.repeat(depth[None, :, :], 3, axis=0)
+    depth = np.clip(depth, 0.0, 10.0) 
+    depth = depth / (10.0)
+    depth = depth - 0.5 
+    depth = depth / 0.5 
+    depth = torch.tensor(depth)
+
+    with torch.no_grad():
+        k = model(rgb.unsqueeze(0), depth.unsqueeze(0))
+
+    return k
+
 
 if __name__ == "__main__":
     largs = tyro.cli(LocalArgs, description=__doc__)
