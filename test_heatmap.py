@@ -18,15 +18,28 @@ import os.path as osp
 from tqdm import tqdm
 import torch.nn.functional as F
 import pickle
-
+from dataclasses import dataclass
+import tyro
 
 NUM_CLASSES = 69
 NUM_VIEWS = 5 
 
+@dataclass
+class LocalArgs:
+    """
+    Class to hold local configuration arguments.
+    """
+    config_file: str = "config.yml"
+    model: str = "./procthor_final.pth"
+    test_folder: str = "/scratch/vineeth.bhat/FourDNet/data/procthor_final/val"
+
 if __name__ == "__main__":
-    cfg.merge_from_file("config.yml")
+    largs = tyro.cli(LocalArgs, description=__doc__)
+    print(largs)
+
+    cfg.merge_from_file(largs.config_file)
     cfg.MODEL.DEVICE_ID = "0"
-    cfg.TEST.WEIGHT = "./procthor_final.pth"
+    cfg.TEST.WEIGHT = largs.model
     cfg.freeze()
     print(cfg)
 
@@ -48,7 +61,7 @@ if __name__ == "__main__":
         ]
     )
 
-    test_path = "./data/procthor_final/val"
+    test_path = largs.test_folder
     test_classes = []
     for classname in os.listdir(test_path):
         test_classes.append(classname)
@@ -86,7 +99,8 @@ if __name__ == "__main__":
 
 
     assert len(model_inputs) == NUM_CLASSES
-    assert len(model_inputs[0]) == NUM_VIEWS
+    for i in range(NUM_CLASSES):
+        assert len(model_inputs[i]) == NUM_VIEWS
 
     model.eval()
     w = []
@@ -101,6 +115,10 @@ if __name__ == "__main__":
                     bar.update(1)
                 w.append(torch.stack(r))
     w = torch.stack(w)
+
+    print(f"We have {NUM_VIEWS} views for {NUM_CLASSES} classes.")
+
+    print(f"w.shape before reshaping = {w.shape}")
     w = w.reshape((-1, w.shape[-1]))
 
     scores = torch.zeros((w.shape[0], w.shape[0])).cpu().numpy()
@@ -109,6 +127,8 @@ if __name__ == "__main__":
             scores[i][j] = w[i] @ w[j] / (torch.norm(w[i]) * torch.norm(w[j]))
 
     print(f"w.shape = {w.shape}")
+    print(f"scores.shape = {scores.shape}")
+
     plt.figure(figsize=(15, 15))
     plt.imshow(scores, cmap="hot")
     plt.colorbar()
@@ -150,3 +170,5 @@ if __name__ == "__main__":
     # Show the heatmap
     plt.title("FourDNet")
     plt.savefig("heatmap.jpg")
+
+    print("Saved plot")
